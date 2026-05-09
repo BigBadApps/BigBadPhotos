@@ -1,208 +1,153 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useState } from 'react';
+import Icon from './Icon';
 
-const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
-
-async function sleep(ms) {
-  await new Promise(resolve => setTimeout(resolve, ms))
+function GoogleMark({ size = 20 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="11" fill="currentColor" opacity=".08" />
+      <circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" strokeWidth="1.4" opacity=".55" />
+      <path d="M12 7a5 5 0 1 0 4.6 7H12v-2.6h7.2c.1.5.2 1 .2 1.6 0 4.2-3 7-7.4 7A7.5 7.5 0 1 1 12 5c2 0 3.7.7 5 1.9l-2 2A4.7 4.7 0 0 0 12 7z" fill="currentColor" />
+    </svg>
+  );
 }
 
-function loadGis() {
-  return new Promise((resolve, reject) => {
-    if (window.google?.accounts?.id) return resolve()
+function AuthGate({ onAuthed }) {
+  const [state, setState] = useState('default');
+  const [hint, setHint] = useState('');
 
-    const existing = document.querySelector('script[data-bbp-gis="1"]')
-    if (existing) {
-      existing.addEventListener('load', () => resolve(), { once: true })
-      existing.addEventListener('error', () => reject(new Error('GIS load failed')), { once: true })
-      return
-    }
-
-    const script = document.createElement('script')
-    script.src = 'https://accounts.google.com/gsi/client'
-    script.async = true
-    script.defer = true
-    script.dataset.bbpGis = '1'
-    script.addEventListener('load', () => resolve(), { once: true })
-    script.addEventListener('error', () => reject(new Error('GIS load failed')), { once: true })
-    document.head.appendChild(script)
-  })
-}
-
-async function waitForBackend({ maxMs = 60000, intervalMs = 1500 } = {}) {
-  const started = Date.now()
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    try {
-      const res = await fetch('/health', { cache: 'no-store' })
-      if (res.ok) return { ok: true, elapsedMs: Date.now() - started }
-    } catch {
-      // ignore and retry
-    }
-
-    const elapsed = Date.now() - started
-    if (elapsed >= maxMs) return { ok: false, elapsedMs: elapsed }
-    await sleep(intervalMs)
+  function trySignIn(scenario) {
+    setState('loading');
+    setHint('Verifying with provider…');
+    setTimeout(() => {
+      if (scenario === 'error') {
+        setState('error');
+        setHint("This account isn't on the allowlist. Contact the project owner to request access.");
+      } else {
+        setState('success');
+        setHint('Authenticated. Loading workspace…');
+        setTimeout(() => onAuthed(), 900);
+      }
+    }, 1000);
   }
+
+  return (
+    <div
+      className="view"
+      style={{
+        minHeight: '100vh',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 'var(--sp-7)',
+        background: 'radial-gradient(ellipse at 50% 30%, color-mix(in oklab, var(--accent) 8%, var(--bg)) 0%, var(--bg) 60%)',
+        position: 'relative', overflow: 'hidden',
+      }}
+    >
+      <div aria-hidden style={{
+        position: 'absolute', inset: 0, opacity: .35,
+        backgroundImage: 'linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px)',
+        backgroundSize: '64px 64px',
+        maskImage: 'radial-gradient(ellipse at center, black 0%, transparent 70%)',
+      }} />
+
+      <div style={{ position: 'relative', width: '100%', maxWidth: 420, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--sp-7)' }}>
+        {/* Brand */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--sp-4)' }}>
+          <div style={{
+            width: 56, height: 56, borderRadius: 14,
+            display: 'grid', placeItems: 'center',
+            background: 'var(--bg-2)', border: '1px solid var(--line)',
+            boxShadow: 'var(--accent-glow)',
+          }}>
+            <Icon name="aperture" size={28} />
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <div className="meta" style={{ marginBottom: 6 }}>v0.4 &middot; Private Beta</div>
+            <h1 style={{ margin: 0, fontSize: 'var(--fs-2xl)', fontWeight: 700, letterSpacing: 'var(--tracking-tight)' }}>BigBadPhotos</h1>
+            <p style={{ margin: '8px 0 0', color: 'var(--fg-3)', fontSize: 'var(--fs-sm)' }}>The darkroom for serious culling.</p>
+          </div>
+        </div>
+
+        {/* Card */}
+        <div className="card card-elevated" style={{ width: '100%', padding: 'var(--sp-7)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-5)' }}>
+          <div className="flex aic gap-3">
+            <div style={{ width: 32, height: 32, borderRadius: 8, display: 'grid', placeItems: 'center', background: 'var(--bg-3)', border: '1px solid var(--line)' }}>
+              <Icon name="lock" size={16} />
+            </div>
+            <div>
+              <div className="meta">Restricted</div>
+              <div className="fs-md" style={{ fontWeight: 600 }}>Sign in to continue</div>
+            </div>
+          </div>
+
+          <button
+            className="btn"
+            onClick={() => trySignIn('ok')}
+            disabled={state === 'loading' || state === 'success'}
+            style={{
+              width: '100%', height: 52,
+              background: 'var(--bg-3)', color: 'var(--fg)',
+              border: '1px solid var(--line-2)', borderRadius: 12,
+              fontSize: 'var(--fs-md)', fontWeight: 600, gap: 12,
+              transition: 'all .2s var(--ease-out)',
+            }}
+          >
+            {state === 'loading' ? (
+              <>
+                <span style={{ width: 16, height: 16, borderRadius: '50%', border: '2px solid var(--line-2)', borderTopColor: 'var(--accent)', animation: 'bbp-spin .7s linear infinite', display: 'inline-block', flexShrink: 0 }} />
+                <span>Authenticating…</span>
+              </>
+            ) : state === 'success' ? (
+              <><Icon name="check" size={18} /><span>Authenticated</span></>
+            ) : (
+              <><GoogleMark size={20} /><span>Continue with Google</span></>
+            )}
+          </button>
+
+          <div className="fs-xs dim" style={{ textAlign: 'center', lineHeight: 1.5 }}>
+            You'll sign in with your Google account.<br />
+            Only invited collaborators can access this workspace.
+          </div>
+
+          {hint && state !== 'default' && (
+            <div style={{
+              padding: '12px 14px', borderRadius: 10,
+              border: '1px solid',
+              borderColor: state === 'error' ? 'color-mix(in oklab, var(--reject) 50%, var(--line))' : 'var(--line)',
+              background: state === 'error' ? 'color-mix(in oklab, var(--reject) 8%, var(--bg-2))' : 'var(--bg-2)',
+              display: 'flex', gap: 10, alignItems: 'flex-start',
+            }}>
+              <span style={{ color: state === 'error' ? 'var(--reject)' : state === 'success' ? 'var(--keep)' : 'var(--accent)', flexShrink: 0, marginTop: 1 }}>
+                <Icon name={state === 'error' ? 'x' : state === 'success' ? 'check' : 'info'} size={14} />
+              </span>
+              <div className="fs-xs" style={{ color: 'var(--fg-2)', lineHeight: 1.5 }}>{hint}</div>
+            </div>
+          )}
+
+          {state === 'default' && (
+            <div style={{ borderTop: '1px dashed var(--line)', paddingTop: 'var(--sp-4)', display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between' }}>
+              <span className="meta">Demo</span>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button className="chip" onClick={() => trySignIn('error')}>Try unauthorized</button>
+                <button className="chip" onClick={() => trySignIn('ok')}>Try success</button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center', color: 'var(--fg-4)', fontSize: 'var(--fs-xxs)' }}>
+          <span className="mono upper">BigBadPhotos &middot; Studio</span>
+          <span>&middot;</span>
+          <a href="#" style={{ color: 'var(--fg-3)' }}>Privacy</a>
+          <span>&middot;</span>
+          <a href="#" style={{ color: 'var(--fg-3)' }}>Status</a>
+        </div>
+      </div>
+      <style>{`@keyframes bbp-spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
 }
 
 export default function GoogleGate({ children }) {
-  // null = loading; false = not authenticated
-  const [user, setUser] = useState(null)
-  const [checking, setChecking] = useState(true)
-  const [error, setError] = useState(null)
-  const [backend, setBackend] = useState({ warming: false, ok: null })
-
-  const canShowSignin = useMemo(() => user === false, [user])
-
-  const handleCredentialResponse = useCallback(async (response) => {
-    setError(null)
-    try {
-      const res = await fetch('/auth/google', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ credential: response.credential }),
-      })
-
-      const data = await res.json().catch(() => ({}))
-      if (res.ok) {
-        setUser(data.user)
-      } else if (res.status === 403) {
-        setError('This Google account is not authorized.')
-        setUser(false)
-      } else {
-        setError(data.detail || 'Sign-in failed.')
-        setUser(false)
-      }
-    } catch {
-      setError('Network error. Is the backend running?')
-      setUser(false)
-    }
-  }, [])
-
-  // Check existing session on mount
-  useEffect(() => {
-    let cancelled = false
-
-    const warmupTimer = setTimeout(() => {
-      if (!cancelled) setBackend({ warming: true, ok: null })
-    }, 800)
-
-    waitForBackend({ maxMs: 60000, intervalMs: 1500 })
-      .then((r) => {
-        if (cancelled) return
-        setBackend({ warming: false, ok: r.ok })
-      })
-      .catch(() => {
-        if (cancelled) return
-        setBackend({ warming: false, ok: false })
-      })
-
-    fetch('/auth/me')
-      .then(r => (r.ok ? r.json() : Promise.reject(new Error('not_authed'))))
-      .then(data => {
-        if (!cancelled) setUser(data.user)
-      })
-      .catch(() => {
-        if (!cancelled) setUser(false)
-      })
-      .finally(() => {
-        if (!cancelled) setChecking(false)
-      })
-
-    return () => {
-      cancelled = true
-      clearTimeout(warmupTimer)
-    }
-  }, [])
-
-  // Initialize GIS when not authenticated
-  useEffect(() => {
-    if (!canShowSignin) return
-    if (!CLIENT_ID) {
-      setError('Missing VITE_GOOGLE_CLIENT_ID (set it in frontend/.env.local).')
-      return
-    }
-
-    let cancelled = false
-
-    loadGis()
-      .then(() => {
-        if (cancelled) return
-        window.google.accounts.id.initialize({
-          client_id: CLIENT_ID,
-          callback: handleCredentialResponse,
-          auto_select: true,
-          use_fedcm_for_prompt: true,
-        })
-        window.google.accounts.id.renderButton(document.getElementById('g_signin_btn'), {
-          type: 'standard',
-          theme: 'filled_black',
-          size: 'large',
-          text: 'signin_with',
-          shape: 'rectangular',
-          width: 280,
-        })
-        window.google.accounts.id.prompt()
-      })
-      .catch(() => {
-        if (!cancelled) setError('Failed to load Google Sign-In.')
-      })
-
-    return () => {
-      cancelled = true
-      if (window.google?.accounts?.id) window.google.accounts.id.cancel()
-    }
-  }, [canShowSignin, handleCredentialResponse])
-
-  // Loading state
-  if (checking) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-surface-container-lowest">
-        <div className="text-center">
-          <h1 className="font-display font-bold text-on-surface text-2xl tracking-wide">
-            BIGBADPHOTOS
-          </h1>
-          <p className="text-on-surface-variant text-sm mt-2 tracking-wider">
-            {backend.warming ? 'WAKING SERVER…' : 'AUTHENTICATING…'}
-          </p>
-        </div>
-      </div>
-    )
-  }
-
-  // Authenticated — render app
-  if (user) return children
-
-  // Sign-in screen
-  return (
-    <div className="flex h-screen items-center justify-center bg-surface-container-lowest">
-      <div className="flex flex-col items-center gap-6 w-72">
-        <div className="text-center">
-          <div className="w-12 h-12 bg-primary/10 flex items-center justify-center mx-auto mb-4">
-            <span
-              className="material-symbols-outlined text-primary"
-              style={{ fontSize: '28px', fontVariationSettings: "'FILL' 1" }}
-            >
-              lock
-            </span>
-          </div>
-          <h1 className="font-display font-bold text-on-surface text-2xl tracking-wide">
-            BIGBADPHOTOS
-          </h1>
-          <p className="text-on-surface-variant text-sm mt-1 tracking-wider">
-            Sign in to continue
-          </p>
-        </div>
-
-        {error && (
-          <p className="text-error text-center tracking-widest" style={{ fontSize: '10px' }}>
-            {error}
-          </p>
-        )}
-
-        <div id="g_signin_btn" />
-      </div>
-    </div>
-  )
+  const [authed, setAuthed] = useState(false);
+  if (authed) return children;
+  return <AuthGate onAuthed={() => setAuthed(true)} />;
 }
-

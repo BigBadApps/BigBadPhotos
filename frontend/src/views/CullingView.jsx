@@ -1,607 +1,355 @@
-import { useEffect, useCallback, useState, useMemo } from 'react'
-import { useStore } from '../store'
-import { usePhotoLoader } from '../hooks/usePhotoLoader'
-import { usePhotoRanker } from '../hooks/usePhotoRanker'
-import { useSessionPersistence } from '../hooks/useSessionPersistence'
+import { useState, useEffect, useRef, useCallback } from 'react';
+import Icon from '../components/Icon';
+import ScoreBar from '../components/ScoreBar';
+import DecisionBadge from '../components/DecisionBadge';
 
-function MetricRow({ label, score }) {
-  const pct = Math.round(score * 100)
-  const color = pct >= 75 ? 'bg-secondary' : pct >= 50 ? 'bg-tertiary' : 'bg-error'
+const SAMPLE_PHOTOS = [
+  { id: 'IMG_4421.ARW', burst: 'A', sharp: 0.92, expo: 0.78, noise: 0.88, comp: 0.71, hue: 28 },
+  { id: 'IMG_4422.ARW', burst: 'A', sharp: 0.71, expo: 0.74, noise: 0.85, comp: 0.66, hue: 30 },
+  { id: 'IMG_4423.ARW', burst: 'A', sharp: 0.45, expo: 0.62, noise: 0.81, comp: 0.58, hue: 32 },
+  { id: 'IMG_4424.ARW', burst: 'B', sharp: 0.88, expo: 0.91, noise: 0.92, comp: 0.84, hue: 195 },
+  { id: 'IMG_4425.ARW', burst: 'B', sharp: 0.65, expo: 0.83, noise: 0.79, comp: 0.72, hue: 200 },
+  { id: 'IMG_4426.ARW', burst: 'C', sharp: 0.31, expo: 0.42, noise: 0.55, comp: 0.40, hue: 12 },
+  { id: 'IMG_4427.ARW', burst: 'C', sharp: 0.58, expo: 0.66, noise: 0.71, comp: 0.62, hue: 14 },
+  { id: 'IMG_4428.ARW', burst: 'D', sharp: 0.94, expo: 0.81, noise: 0.89, comp: 0.91, hue: 270 },
+  { id: 'IMG_4429.ARW', burst: 'D', sharp: 0.52, expo: 0.58, noise: 0.66, comp: 0.55, hue: 268 },
+  { id: 'IMG_4430.ARW', burst: 'E', sharp: 0.79, expo: 0.85, noise: 0.83, comp: 0.78, hue: 95 },
+  { id: 'IMG_4431.ARW', burst: 'E', sharp: 0.82, expo: 0.79, noise: 0.81, comp: 0.80, hue: 92 },
+  { id: 'IMG_4432.ARW', burst: 'F', sharp: 0.41, expo: 0.49, noise: 0.61, comp: 0.46, hue: 350 },
+];
+
+function PhotoArt({ photo, flash }) {
+  const h = photo.hue;
   return (
-    <div className="flex items-center gap-2">
-      <span className="text-on-surface-variant w-16 shrink-0" style={{ fontSize: '9px' }}>{label}</span>
-      <div className="flex-1 h-0.5 bg-surface-container-highest overflow-hidden">
-        <div className={`h-full ${color} transition-all`} style={{ width: `${pct}%` }} />
-      </div>
-      <span className="text-on-surface w-6 text-right font-mono" style={{ fontSize: '9px' }}>{pct}</span>
+    <div style={{
+      position: 'absolute', inset: 0,
+      background: `
+        radial-gradient(ellipse at 30% 20%, oklch(72% 0.15 ${h}) 0%, transparent 55%),
+        radial-gradient(ellipse at 70% 80%, oklch(35% 0.10 ${(h + 40) % 360}) 0%, transparent 60%),
+        linear-gradient(135deg, oklch(20% 0.04 ${h}) 0%, oklch(12% 0.03 ${(h + 180) % 360}) 100%)
+      `,
+      transition: 'filter .25s var(--ease-out)',
+      filter: flash ? 'brightness(1.15) saturate(1.1)' : 'none',
+    }}>
+      <div style={{
+        position: 'absolute', inset: 0,
+        backgroundImage: 'repeating-linear-gradient(0deg, rgba(255,255,255,.015) 0 1px, transparent 1px 3px)',
+        mixBlendMode: 'overlay',
+      }} />
+      <div style={{
+        position: 'absolute', left: '50%', top: '55%', transform: 'translate(-50%, -50%)',
+        width: '34%', height: '50%',
+        background: `radial-gradient(ellipse, oklch(60% 0.12 ${h}) 0%, transparent 70%)`,
+        opacity: .7, filter: 'blur(1px)',
+      }} />
     </div>
-  )
+  );
 }
 
-function AIScoreBadge({ photo }) {
-  const overall = Math.round((photo.overallScore ?? 0) * 100)
-  const overallColor = overall >= 75 ? 'text-secondary' : overall >= 50 ? 'text-tertiary' : 'text-error'
-  const subj = photo.subject
-  const comp = photo.composition
-  const hasFace = subj && subj.face_count > 0
-  const blinkDetected = hasFace && subj.eyes_open === false
-  const horizonAngle = comp?.horizon_angle ?? 0
-  const tiltWarning = comp && Math.abs(horizonAngle) >= 2.0
-
+function DecisionDock({ counts, decision, decide, undo, canUndo, showInlineKbd }) {
+  const items = [
+    { kind: 'reject', label: 'Reject', kbd: 'R', icon: 'x' },
+    { kind: 'maybe',  label: 'Maybe',  kbd: 'M', icon: 'qmark' },
+    { kind: 'keep',   label: 'Keep',   kbd: 'P', icon: 'check' },
+  ];
   return (
-    <div
-      className="flex flex-col gap-2 px-4 py-3 border border-primary/20 min-w-44"
-      style={{ background: 'rgba(26,26,26,0.85)', backdropFilter: 'blur(20px)' }}
-    >
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-primary" style={{ fontSize: '14px', fontVariationSettings: "'FILL' 1" }}>auto_awesome</span>
-          <span className="text-on-surface-variant tracking-widest font-bold" style={{ fontSize: '9px' }}>AI SCORE</span>
-        </div>
-        <span className={`font-display font-extrabold text-xl leading-none ${overallColor}`}>{overall}</span>
-      </div>
-
-      {/* Warnings */}
-      {blinkDetected && (
-        <div className="flex items-center gap-1.5 bg-error/15 px-2 py-1">
-          <span className="material-symbols-outlined text-error" style={{ fontSize: '11px', fontVariationSettings: "'FILL' 1" }}>visibility_off</span>
-          <span className="text-error font-bold tracking-widest" style={{ fontSize: '9px' }}>BLINK DETECTED</span>
-        </div>
-      )}
-      {tiltWarning && (
-        <div className="flex items-center gap-1.5 bg-tertiary/10 px-2 py-1">
-          <span className="material-symbols-outlined text-tertiary" style={{ fontSize: '11px', fontVariationSettings: "'FILL' 1" }}>straighten</span>
-          <span className="text-tertiary font-bold tracking-widest" style={{ fontSize: '9px' }}>
-            HORIZON {horizonAngle > 0 ? '+' : ''}{horizonAngle.toFixed(1)}°
-          </span>
-        </div>
-      )}
-
-      {/* Divider */}
-      <div className="h-px bg-outline-variant/20" />
-
-      {/* Per-metric rows */}
-      <div className="flex flex-col gap-1.5">
-        <MetricRow label="FOCUS"       score={photo.sharpness ?? 0} />
-        <MetricRow label="EXPOSURE"    score={photo.exposure?.exposure_score ?? 0} />
-        <MetricRow label="NOISE"       score={photo.noise?.noise_score ?? 0} />
-        <MetricRow label="CONTRAST"    score={photo.contrast?.contrast_score ?? 0} />
-        {hasFace && (
-          <MetricRow label="SUBJECT"   score={subj.subject_score ?? 0} />
-        )}
-        {comp && (
-          <MetricRow label="COMPOSIT." score={comp.composition_score ?? 0} />
-        )}
-      </div>
-
-      {/* Face count indicator */}
-      {hasFace && (
-        <div className="flex items-center gap-1.5 mt-0.5">
-          <span className="material-symbols-outlined text-primary/60" style={{ fontSize: '10px', fontVariationSettings: "'FILL' 1" }}>face</span>
-          <span className="text-on-surface-variant/60" style={{ fontSize: '9px' }}>
-            {subj.face_count} face{subj.face_count !== 1 ? 's' : ''} · eyes {subj.eyes_open ? 'open' : 'closed'}
-          </span>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function DecisionButton({ label, shortcut, icon, color, onClick, active }) {
-  const colorMap = {
-    keep: {
-      icon: active ? 'bg-secondary text-on-secondary' : 'bg-secondary/15 text-secondary hover:bg-secondary/25',
-      text: 'text-secondary',
-    },
-    maybe: {
-      icon: active ? 'bg-tertiary text-on-tertiary' : 'bg-tertiary/10 text-tertiary hover:bg-tertiary/20',
-      text: 'text-tertiary',
-    },
-    reject: {
-      icon: active ? 'bg-error text-on-error' : 'bg-error/10 text-error hover:bg-error/20',
-      text: 'text-error',
-    },
-  }
-  const c = colorMap[color]
-  return (
-    <button
-      onClick={onClick}
-      className={`flex flex-col items-center gap-2 transition-all duration-150 ${active ? 'scale-110' : 'opacity-70 hover:opacity-100'}`}
-    >
-      <div className={`w-10 h-10 flex items-center justify-center transition-colors ${c.icon}`}>
-        <span className="material-symbols-outlined" style={{ fontSize: '22px', fontVariationSettings: "'wght' 300" }}>{icon}</span>
-      </div>
-      <div className="flex flex-col items-center gap-0.5">
-        <span className={`font-bold tracking-widest ${c.text}`} style={{ fontSize: '9px' }}>{label}</span>
-        <span className="text-on-surface-variant/40" style={{ fontSize: '9px' }}>[{shortcut}]</span>
-      </div>
-    </button>
-  )
-}
-
-// Stable palette of 8 burst group colours (cycles for groups > 8)
-const BURST_COLORS = [
-  '#69daff', '#a8edce', '#ffb74d', '#ce93d8',
-  '#ef9a9a', '#80cbc4', '#fff176', '#90caf9',
-]
-
-function burstColor(groupId) {
-  return BURST_COLORS[(groupId - 1) % BURST_COLORS.length]
-}
-
-function FilmstripThumb({ photo, isActive, onClick }) {
-  const decisionDot = {
-    keep: 'bg-secondary',
-    maybe: 'bg-tertiary',
-    reject: 'bg-error',
-  }
-  const hasBurst = photo.burstGroup != null
-
-  return (
-    <div
-      onClick={onClick}
-      className={`flex-shrink-0 cursor-pointer overflow-hidden relative transition-all duration-200 ${
-        isActive
-          ? 'w-20 h-20 border-2 border-primary ring-4 ring-primary/20 z-10 mx-1'
-          : 'w-16 h-16 opacity-40 hover:opacity-80 border border-transparent'
-      }`}
-    >
-      {photo.url ? (
-        <img src={photo.url} alt="" className="w-full h-full object-cover" />
-      ) : (
-        <div className="w-full h-full bg-surface-container-high flex items-center justify-center">
-          <span className="material-symbols-outlined text-on-surface-variant" style={{ fontSize: '20px' }}>photo</span>
-        </div>
-      )}
-      {/* Burst group colour bar along the bottom */}
-      {hasBurst && (
-        <div
-          className="absolute bottom-0 left-0 right-0 h-1"
-          style={{ background: burstColor(photo.burstGroup) }}
-        />
-      )}
-      {/* Best-in-burst star */}
-      {hasBurst && photo.isBurstBest && (
-        <div className="absolute top-1 left-1">
-          <span
-            className="material-symbols-outlined"
-            style={{ fontSize: '11px', fontVariationSettings: "'FILL' 1", color: burstColor(photo.burstGroup) }}
-          >star</span>
-        </div>
-      )}
-      {photo.decision && (
-        <div className={`absolute top-1 right-1 w-2 h-2 rounded-full ${decisionDot[photo.decision]}`} />
-      )}
-    </div>
-  )
-}
-
-const FILTER_METRICS = [
-  { key: 'overall',     label: 'OVERALL SCORE', path: p => p.overallScore },
-  { key: 'focus',       label: 'FOCUS',         path: p => p.sharpness },
-  { key: 'exposure',    label: 'EXPOSURE',       path: p => p.exposure?.exposure_score },
-  { key: 'noise',       label: 'NOISE',          path: p => p.noise?.noise_score },
-  { key: 'contrast',    label: 'CONTRAST',       path: p => p.contrast?.contrast_score },
-  { key: 'subject',     label: 'SUBJECT',        path: p => p.subject?.subject_score },
-  { key: 'composition', label: 'COMPOSITION',    path: p => p.composition?.composition_score },
-]
-
-function getScore(photo, metric) {
-  const val = metric.path(photo)
-  return val == null ? null : val
-}
-
-function meetsFilters(photo, applied) {
-  for (const { key, min } of applied) {
-    const metric = FILTER_METRICS.find(m => m.key === key)
-    if (!metric) continue
-    const score = getScore(photo, metric)
-    if (score == null || score < min) return false
-  }
-  return true
-}
-
-function FilterPanel({ onApply, onClear, hasFilter }) {
-  const [rows, setRows] = useState(
-    FILTER_METRICS.map(m => ({ key: m.key, label: m.label, enabled: false, value: '70' }))
-  )
-
-  const toggle = (key) => setRows(r => r.map(row => row.key === key ? { ...row, enabled: !row.enabled } : row))
-  const setValue = (key, val) => setRows(r => r.map(row => row.key === key ? { ...row, value: val } : row))
-
-  const handleApply = () => {
-    const active = rows
-      .filter(r => r.enabled)
-      .map(r => ({ key: r.key, min: Math.max(0, Math.min(100, parseInt(r.value, 10) || 0)) / 100 }))
-    onApply(active)
-  }
-
-  return (
-    <div className="border-t border-outline-variant/20 bg-surface-container px-6 py-3">
-      <div className="flex items-start gap-6 flex-wrap">
-        {rows.map(row => (
-          <div key={row.key} className="flex items-center gap-2">
-            <button
-              onClick={() => toggle(row.key)}
-              className={`w-4 h-4 flex items-center justify-center border transition-colors ${
-                row.enabled ? 'bg-primary border-primary' : 'border-outline-variant/40 bg-transparent'
-              }`}
-            >
-              {row.enabled && <span className="material-symbols-outlined text-surface-container" style={{ fontSize: '11px', fontVariationSettings: "'FILL' 1" }}>check</span>}
-            </button>
-            <span className="text-on-surface-variant tracking-widest" style={{ fontSize: '9px' }}>{row.label}</span>
-            {row.enabled && (
-              <div className="flex items-center gap-1">
-                <span className="text-on-surface-variant/50" style={{ fontSize: '9px' }}>≥</span>
-                <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  value={row.value}
-                  onChange={e => setValue(row.key, e.target.value)}
-                  className="w-10 bg-surface-container-high border border-outline-variant/30 text-on-surface text-center font-mono py-0.5 outline-none focus:border-primary"
-                  style={{ fontSize: '10px' }}
-                />
-                <span className="text-on-surface-variant/50" style={{ fontSize: '9px' }}>%</span>
-              </div>
-            )}
-          </div>
-        ))}
-
-        <div className="flex items-center gap-2 ml-auto">
-          {hasFilter && (
-            <button
-              onClick={() => { setRows(r => r.map(row => ({ ...row, enabled: false }))); onClear() }}
-              className="text-on-surface-variant/60 hover:text-on-surface-variant tracking-widest transition-colors"
-              style={{ fontSize: '9px' }}
-            >
-              CLEAR
-            </button>
-          )}
+    <div style={{
+      display: 'grid', gridTemplateColumns: '40px 1fr 1fr 1fr', gap: 'var(--sp-3)',
+      padding: 'var(--sp-3)', background: 'var(--bg-2)',
+      border: '1px solid var(--line)', borderRadius: 14, flexShrink: 0,
+    }}>
+      <button
+        onClick={undo} disabled={!canUndo} aria-label="Undo" title="Undo (⌘Z)"
+        style={{
+          height: 56, borderRadius: 10, background: 'var(--bg-3)', border: '1px solid var(--line)',
+          display: 'grid', placeItems: 'center',
+          color: canUndo ? 'var(--fg-2)' : 'var(--fg-4)',
+          cursor: canUndo ? 'pointer' : 'not-allowed',
+          transition: 'all .15s',
+        }}
+      >
+        <Icon name="undo" size={16} />
+      </button>
+      {items.map(({ kind, label, kbd, icon }) => {
+        const isActive = decision === kind;
+        return (
           <button
-            onClick={handleApply}
-            className="bg-primary text-surface-container px-4 py-1.5 font-bold tracking-widest transition-opacity hover:opacity-80"
-            style={{ fontSize: '9px' }}
+            key={kind}
+            onClick={() => decide(kind)}
+            style={{
+              height: 56, borderRadius: 10, padding: '0 12px',
+              background: isActive ? `color-mix(in oklab, var(--${kind}) 18%, var(--bg-3))` : 'var(--bg-3)',
+              border: `1px solid ${isActive ? `var(--${kind})` : 'var(--line)'}`,
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              gap: 8, cursor: 'pointer', transition: 'all .12s var(--ease-out)',
+            }}
           >
-            APPLY FILTER
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{
+                width: 28, height: 28, borderRadius: 99,
+                background: `color-mix(in oklab, var(--${kind}) ${isActive ? 30 : 20}%, var(--bg-2))`,
+                color: `var(--${kind})`, display: 'grid', placeItems: 'center', flexShrink: 0,
+              }}>
+                <Icon name={icon} size={14} stroke={2} />
+              </span>
+              <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                <span className="fs-sm" style={{ fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase', color: isActive ? `var(--${kind})` : 'var(--fg)' }}>{label}</span>
+                <span className="mono fs-xxs" style={{ color: 'var(--fg-3)' }}>{counts[kind]}</span>
+              </span>
+            </span>
+            {showInlineKbd && (
+              <kbd style={{ fontFamily: 'var(--font-mono)', fontSize: 10, padding: '3px 6px', background: 'var(--bg-2)', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--fg-3)' }}>{kbd}</kbd>
+            )}
           </button>
-        </div>
-      </div>
+        );
+      })}
     </div>
-  )
+  );
 }
 
-export default function CullingView() {
-  const { loading, loadingComplete, loadedCount, totalCount: scanTotal, loadError } = usePhotoLoader()
-  const { scoring, scoredCount, backendAvailable } = usePhotoRanker(loadingComplete)
-  useSessionPersistence(loadingComplete)
+export default function CullingView({ feedbackIntensity = 'pronounced', showInlineKbd = true, onComplete, photos }) {
+  const photoList = (photos && photos.length) ? photos : SAMPLE_PHOTOS;
+  const [idx, setIdx] = useState(0);
+  const [decisions, setDecisions] = useState({});
+  const [history, setHistory] = useState([]);
+  const [flashKind, setFlashKind] = useState(null);
+  const [toast, setToast] = useState(null);
+  const [swipeDx, setSwipeDx] = useState(0);
+  const [swipeDy, setSwipeDy] = useState(0);
+  const [swiping, setSwiping] = useState(false);
+  const photo = photoList[idx];
 
-  const photos = useStore(state => state.photos)
-  const order = useStore(state => state.order)
-  const currentId = useStore(state => state.currentId)
-  const setCurrentId = useStore(state => state.setCurrentId)
-  const makeDecision = useStore(state => state.makeDecision)
-  const undoDecision = useStore(state => state.undo)
-  const history = useStore(state => state.history)
+  const counts = {
+    keep:   Object.values(decisions).filter(d => d === 'keep').length,
+    maybe:  Object.values(decisions).filter(d => d === 'maybe').length,
+    reject: Object.values(decisions).filter(d => d === 'reject').length,
+  };
+  const decided = counts.keep + counts.maybe + counts.reject;
+  const total = photoList.length;
+  const progress = (decided / total) * 100;
 
-  const [showFilters, setShowFilters] = useState(false)
-  const [appliedFilters, setAppliedFilters] = useState([]) // [{key, min}]
-
-  const filteredOrder = useMemo(() => {
-    if (appliedFilters.length === 0) return order
-    return order.filter(id => meetsFilters(photos[id], appliedFilters))
-  }, [order, photos, appliedFilters])
-
-  const currentPhoto = photos[currentId]
-  const currentIndex = filteredOrder.indexOf(currentId)
-  const totalCount = filteredOrder.length
-  const keepCount = Object.values(photos).filter(p => p.decision === 'keep').length
-  const sessionPct = totalCount > 0 ? Math.round((keepCount / totalCount) * 100) : 0
-
-  const goNext = useCallback(() => {
-    if (currentIndex < filteredOrder.length - 1) setCurrentId(filteredOrder[currentIndex + 1])
-  }, [currentIndex, filteredOrder, setCurrentId])
-
-  const goPrev = useCallback(() => {
-    if (currentIndex > 0) setCurrentId(filteredOrder[currentIndex - 1])
-  }, [currentIndex, filteredOrder, setCurrentId])
-
-  const decide = useCallback((decision) => {
-    if (currentId) {
-      makeDecision(currentId, decision)
-      goNext()
-    }
-  }, [currentId, makeDecision, goNext])
+  const decide = useCallback((kind) => {
+    const prev = decisions[photo.id];
+    setDecisions(d => ({ ...d, [photo.id]: kind }));
+    setHistory(h => [...h, { id: photo.id, prev }]);
+    setFlashKind(kind);
+    setTimeout(() => setFlashKind(null), feedbackIntensity === 'pronounced' ? 320 : 180);
+    setToast({ kind, label: { keep: 'Kept', maybe: 'Maybe', reject: 'Rejected' }[kind] });
+    setTimeout(() => setToast(null), 1100);
+    if (navigator.vibrate) navigator.vibrate(kind === 'reject' ? [12, 40, 12] : 18);
+    setTimeout(() => setIdx(i => Math.min(i + 1, photoList.length - 1)), 250);
+  }, [decisions, photo, feedbackIntensity, photoList.length]);
 
   const undo = useCallback(() => {
-    if (history.length === 0) return
-    const lastId = history[history.length - 1].id
-    undoDecision()
-    setCurrentId(lastId)
-  }, [history, undoDecision, setCurrentId])
+    if (!history.length) return;
+    const last = history[history.length - 1];
+    setHistory(h => h.slice(0, -1));
+    setDecisions(d => {
+      const next = { ...d };
+      if (last.prev) next[last.id] = last.prev;
+      else delete next[last.id];
+      return next;
+    });
+    const i = photoList.findIndex(p => p.id === last.id);
+    if (i >= 0) setIdx(i);
+    setToast({ kind: 'undo', label: 'Undone' });
+    setTimeout(() => setToast(null), 900);
+  }, [history, photoList]);
 
   useEffect(() => {
-    const handleKey = (e) => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
-      if (e.key === 'p' || e.key === 'P') decide('keep')
-      else if (e.key === 'u' || e.key === 'U') decide('maybe')
-      else if (e.key === 'x' || e.key === 'X') decide('reject')
-      else if (e.key === 'ArrowRight') goNext()
-      else if (e.key === 'ArrowLeft') goPrev()
-      else if ((e.key === 'z' || e.key === 'Z') && !e.metaKey && !e.ctrlKey) undo()
+    function onKey(e) {
+      if (e.target?.tagName === 'INPUT' || e.target?.tagName === 'TEXTAREA') return;
+      const k = e.key.toLowerCase();
+      if (k === 'p') { e.preventDefault(); decide('keep'); }
+      else if (k === 'm') { e.preventDefault(); decide('maybe'); }
+      else if (k === 'r') { e.preventDefault(); decide('reject'); }
+      else if (k === 'arrowright') setIdx(i => Math.min(i + 1, total - 1));
+      else if (k === 'arrowleft')  setIdx(i => Math.max(i - 1, 0));
+      else if ((e.metaKey || e.ctrlKey) && k === 'z') { e.preventDefault(); undo(); }
     }
-    window.addEventListener('keydown', handleKey)
-    return () => window.removeEventListener('keydown', handleKey)
-  }, [decide, goNext, goPrev, undo])
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [decide, undo, total]);
 
-  // Loading state — show progress while scanning/reading files
-  if (loading && order.length === 0) {
-    return (
-      <div className="flex flex-col h-full items-center justify-center gap-6 bg-surface-container-lowest">
-        <span className="material-symbols-outlined text-primary/40 animate-pulse" style={{ fontSize: '64px' }}>photo_library</span>
-        <div className="text-center">
-          <p className="text-on-surface-variant tracking-widest text-xs font-bold mb-2">LOADING PHOTOS</p>
-          {scanTotal > 0 ? (
-            <p className="text-primary font-display font-bold text-2xl">{loadedCount} / {scanTotal}</p>
-          ) : (
-            <p className="text-on-surface-variant text-sm">Scanning folder...</p>
-          )}
-        </div>
-        {scanTotal > 0 && (
-          <div className="w-48 h-1 bg-surface-container-highest overflow-hidden">
-            <div
-              className="h-full bg-primary transition-all duration-300"
-              style={{ width: `${Math.round((loadedCount / scanTotal) * 100)}%` }}
-            />
-          </div>
-        )}
-      </div>
-    )
+  const touchRef = useRef({ x: 0, y: 0, active: false });
+  function onTouchStart(e) {
+    const t = e.touches[0];
+    touchRef.current = { x: t.clientX, y: t.clientY, active: true };
+    setSwiping(true);
+  }
+  function onTouchMove(e) {
+    if (!touchRef.current.active) return;
+    const t = e.touches[0];
+    setSwipeDx(t.clientX - touchRef.current.x);
+    setSwipeDy(t.clientY - touchRef.current.y);
+  }
+  function onTouchEnd() {
+    const dx = swipeDx, dy = swipeDy;
+    touchRef.current.active = false;
+    setSwiping(false); setSwipeDx(0); setSwipeDy(0);
+    const ax = Math.abs(dx), ay = Math.abs(dy), T = 80;
+    if (ax > T && ax > ay) decide(dx > 0 ? 'keep' : 'reject');
+    else if (-dy > T && ay > ax) decide('maybe');
   }
 
-  // Error state
-  if (loadError) {
-    return (
-      <div className="flex flex-col h-full items-center justify-center gap-4 bg-surface-container-lowest">
-        <span className="material-symbols-outlined text-error" style={{ fontSize: '48px' }}>error_outline</span>
-        <p className="text-on-surface-variant text-sm tracking-wider">Failed to load photos</p>
-        <p className="text-error/70 text-xs font-mono">{loadError}</p>
-      </div>
-    )
-  }
+  const overall = (photo.sharp + photo.expo + photo.noise + photo.comp) / 4;
+  const decision = decisions[photo.id];
+
+  const swipeKind = (() => {
+    if (!swiping) return null;
+    const ax = Math.abs(swipeDx), ay = Math.abs(swipeDy);
+    if (ax > 30 && ax > ay) return swipeDx > 0 ? 'keep' : 'reject';
+    if (-swipeDy > 30 && ay > ax) return 'maybe';
+    return null;
+  })();
 
   return (
-    <div className="flex flex-col h-full bg-surface-container-lowest">
-
-      {/* Main area: photo + right action column */}
-      <div className="flex flex-1 min-h-0">
-
-        {/* Photo viewer */}
-        <div className="flex-1 relative overflow-hidden bg-black">
-
-          {/* Photo */}
-          {currentPhoto?.url ? (
-            <img
-              src={currentPhoto.url}
-              alt={currentPhoto.filename || ''}
-              className="w-full h-full object-contain"
-            />
-          ) : currentPhoto?.isRaw ? (
-            <div className="w-full h-full flex flex-col items-center justify-center gap-4">
-              <span className="material-symbols-outlined text-on-surface-variant/30" style={{ fontSize: '72px' }}>raw_on</span>
-              <div className="text-center">
-                <p className="text-on-surface-variant text-sm tracking-wider">{currentPhoto.filename}</p>
-                <p className="text-on-surface-variant/40 text-xs mt-2 tracking-wide">RAW preview requires backend processing</p>
-              </div>
-            </div>
-          ) : (
-            <div className="w-full h-full flex flex-col items-center justify-center gap-4">
-              <span className="material-symbols-outlined text-on-surface-variant/30" style={{ fontSize: '72px' }}>photo_library</span>
-              <div className="text-center">
-                <p className="text-on-surface-variant text-sm tracking-wider">NO PHOTOS LOADED</p>
-                <p className="text-on-surface-variant/40 text-xs mt-2 tracking-wide">Select a source folder to begin culling</p>
-              </div>
-            </div>
-          )}
-
-          {/* Top-left: AI Score badge */}
-          <div className="absolute top-6 left-6 flex flex-col gap-2 z-10">
-            {currentPhoto?.overallScore != null ? (
-              <AIScoreBadge photo={currentPhoto} />
-            ) : scoring && !currentPhoto?.isRaw ? (
-              <div
-                className="flex items-center gap-2 px-4 py-2 border border-outline-variant/20"
-                style={{ background: 'rgba(38,38,38,0.75)', backdropFilter: 'blur(20px)' }}
-              >
-                <span className="material-symbols-outlined text-on-surface-variant/50 animate-pulse" style={{ fontSize: '16px' }}>auto_awesome</span>
-                <p className="text-on-surface-variant/50 tracking-widest" style={{ fontSize: '9px' }}>ANALYZING…</p>
-              </div>
-            ) : null}
-          </div>
-
-          {/* Bottom-left: filename + focus status */}
-          {currentPhoto && (
-            <div className="absolute bottom-6 left-6 z-10">
-              <p className="text-on-surface text-sm font-medium tracking-wider">{currentPhoto.filename || currentPhoto.id}</p>
-              {currentPhoto.focusStatus && (
-                <p className="text-on-surface-variant text-xs tracking-wider mt-1">{currentPhoto.focusStatus}</p>
-              )}
-            </div>
-          )}
-
-          {/* Bottom-right: burst badge */}
-          {currentPhoto?.burstGroup != null && (
-            <div
-              className="absolute bottom-6 right-6 z-10 flex items-center gap-2 px-3 py-1.5"
-              style={{ background: 'rgba(26,26,26,0.85)', backdropFilter: 'blur(20px)', borderLeft: `3px solid ${burstColor(currentPhoto.burstGroup)}` }}
-            >
-              <span
-                className="material-symbols-outlined"
-                style={{ fontSize: '13px', fontVariationSettings: "'FILL' 1", color: burstColor(currentPhoto.burstGroup) }}
-              >{currentPhoto.isBurstBest ? 'star' : 'burst_mode'}</span>
-              <div className="flex flex-col gap-0.5">
-                <span className="font-bold tracking-widest" style={{ fontSize: '9px', color: burstColor(currentPhoto.burstGroup) }}>
-                  {currentPhoto.isBurstBest ? 'BEST IN BURST' : `BURST GROUP ${currentPhoto.burstGroup}`}
-                </span>
-                <span className="text-on-surface-variant/60 tracking-widest" style={{ fontSize: '9px' }}>
-                  {currentPhoto.burstSize} SIMILAR FRAMES
-                </span>
-              </div>
-            </div>
-          )}
-
-          {/* Nav arrows */}
-          <button
-            onClick={goPrev}
-            disabled={currentIndex <= 0}
-            className="absolute left-3 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center text-on-surface/30 hover:text-on-surface/80 disabled:opacity-0 transition-all z-10"
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: '36px' }}>chevron_left</span>
-          </button>
-          <button
-            onClick={goNext}
-            disabled={currentIndex >= filteredOrder.length - 1}
-            className="absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center text-on-surface/30 hover:text-on-surface/80 disabled:opacity-0 transition-all z-10"
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: '36px' }}>chevron_right</span>
-          </button>
-        </div>
-
-        {/* Right action column */}
-        <div className="w-20 shrink-0 flex flex-col items-center justify-center gap-6 bg-surface-container-low border-l border-outline-variant/20">
-          <DecisionButton
-            label="KEEP"
-            shortcut="P"
-            icon="check"
-            color="keep"
-            onClick={() => decide('keep')}
-            active={currentPhoto?.decision === 'keep'}
-          />
-          <DecisionButton
-            label="MAYBE"
-            shortcut="U"
-            icon="star"
-            color="maybe"
-            onClick={() => decide('maybe')}
-            active={currentPhoto?.decision === 'maybe'}
-          />
-          <DecisionButton
-            label="REJECT"
-            shortcut="X"
-            icon="close"
-            color="reject"
-            onClick={() => decide('reject')}
-            active={currentPhoto?.decision === 'reject'}
-          />
-        </div>
+    <div className="view culling-view" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {/* Progress strip */}
+      <div style={{ height: 2, background: 'var(--bg-3)', position: 'relative', flexShrink: 0 }}>
+        <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${progress}%`, background: 'var(--accent)', boxShadow: '0 0 8px var(--accent)', transition: 'width .35s var(--ease-out)' }} />
       </div>
 
-      {/* Bottom strip */}
-      <div className="shrink-0 border-t border-outline-variant/20 bg-surface-container-low">
-
-        {/* Stats bar */}
-        <div className="flex items-center justify-between px-6 py-2">
-          <div className="flex flex-col gap-1 min-w-32">
-            <span className="text-on-surface-variant tracking-widest" style={{ fontSize: '9px', fontWeight: 600 }}>SESSION HEALTH</span>
-            <div className="w-24 h-1 bg-surface-container-highest overflow-hidden">
-              <div className="h-full bg-primary transition-all duration-500" style={{ width: `${sessionPct}%` }} />
-            </div>
-            <span className="text-on-surface-variant tracking-wider" style={{ fontSize: '9px' }}>{sessionPct}% SELECTED</span>
-          </div>
-
-          <div className="text-center">
-            <div className="text-on-surface-variant tracking-widest" style={{ fontSize: '10px' }}>
-              {totalCount > 0 ? `${currentIndex + 1} / ${totalCount} IMAGES` : 'NO IMAGES'}
-            </div>
-            {appliedFilters.length > 0 && (
-              <div className="text-primary/70 tracking-widest mt-0.5" style={{ fontSize: '9px' }}>
-                FILTERED · {totalCount} OF {order.length}
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center gap-3">
-            {/* Undo */}
-            <button
-              onClick={undo}
-              disabled={history.length === 0}
-              title="Undo last decision [Z]"
-              className="flex items-center gap-1 text-on-surface-variant/50 hover:text-on-surface-variant disabled:opacity-20 transition-colors"
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>undo</span>
-              <span className="tracking-widest" style={{ fontSize: '9px' }}>UNDO [Z]</span>
-            </button>
-
-            <div className="w-px h-4 bg-outline-variant/30" />
-
-            {/* Backend / scoring status */}
-            {scoring && (
-              <span className="text-primary/60 tracking-widest animate-pulse" style={{ fontSize: '9px' }}>
-                SCORING {scoredCount}/{totalCount}
-              </span>
-            )}
-            {!backendAvailable && (
-              <span className="text-error/60 tracking-widest" style={{ fontSize: '9px' }}>
-                BACKEND OFFLINE
-              </span>
-            )}
-            <button className="text-on-surface-variant/50 hover:text-on-surface-variant transition-colors">
-              <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>zoom_in</span>
-            </button>
-            <button className="text-on-surface-variant/50 hover:text-on-surface-variant transition-colors">
-              <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>grid_view</span>
-            </button>
-            <button
-              onClick={() => setShowFilters(v => !v)}
-              className={`relative transition-colors ${showFilters || appliedFilters.length > 0 ? 'text-primary' : 'text-on-surface-variant/50 hover:text-on-surface-variant'}`}
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: '18px', fontVariationSettings: showFilters ? "'FILL' 1" : "'FILL' 0" }}>tune</span>
-              {appliedFilters.length > 0 && (
-                <span className="absolute -top-1 -right-1 w-3 h-3 bg-primary text-surface-container flex items-center justify-center font-bold" style={{ fontSize: '7px' }}>
-                  {appliedFilters.length}
-                </span>
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* Filter panel */}
-        {showFilters && (
-          <FilterPanel
-            onApply={(filters) => {
-              setAppliedFilters(filters)
-              // Jump to first matching photo if current is excluded
-              if (filters.length > 0) {
-                const first = order.find(id => meetsFilters(photos[id], filters))
-                if (first && !meetsFilters(photos[currentId], filters)) setCurrentId(first)
-              }
+      <div className="culling-grid" style={{ flex: 1, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: 'var(--gap)', padding: 'var(--pad)', minHeight: 0 }}>
+        {/* Main column */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)', minHeight: 0 }}>
+          {/* Photo frame */}
+          <div
+            onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
+            style={{
+              position: 'relative', flex: 1, minHeight: 360,
+              borderRadius: 14, overflow: 'hidden',
+              background: 'var(--bg-2)',
+              border: `1px solid ${flashKind ? `var(--${flashKind})` : 'var(--line)'}`,
+              boxShadow: flashKind && feedbackIntensity === 'pronounced'
+                ? `0 0 0 2px var(--${flashKind}), 0 0 32px color-mix(in oklab, var(--${flashKind}) 40%, transparent)`
+                : 'none',
+              transition: 'border-color .2s, box-shadow .2s',
+              transform: swiping
+                ? `translate(${swipeDx * 0.3}px, ${Math.min(0, swipeDy * 0.3)}px) rotate(${swipeDx * 0.02}deg)`
+                : 'none',
+              touchAction: 'none',
             }}
-            onClear={() => setAppliedFilters([])}
-            hasFilter={appliedFilters.length > 0}
-          />
-        )}
+          >
+            <PhotoArt photo={photo} flash={!!flashKind} />
 
-        {/* Filmstrip */}
-        <div className="h-24 flex items-center gap-1 px-4 overflow-x-auto no-scrollbar border-t border-outline-variant/10">
-          {filteredOrder.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center">
-              <span className="text-on-surface-variant/30 text-xs tracking-wider">
-                {appliedFilters.length > 0 ? 'No photos match the current filters' : 'Filmstrip will appear here'}
+            <div style={{ position: 'absolute', top: 'var(--sp-4)', left: 'var(--sp-4)', display: 'flex', gap: 8, alignItems: 'center', padding: '6px 10px', borderRadius: 999, background: 'rgba(0,0,0,.55)', backdropFilter: 'blur(8px)', border: '1px solid rgba(255,255,255,.08)' }}>
+              <span className="mono fs-xxs" style={{ color: 'var(--fg)' }}>{photo.id}</span>
+              <span style={{ color: 'var(--fg-4)' }}>&middot;</span>
+              <span className="meta">Burst {photo.burst}</span>
+            </div>
+
+            <div style={{ position: 'absolute', top: 'var(--sp-4)', right: 'var(--sp-4)', padding: '6px 10px', borderRadius: 999, background: 'rgba(0,0,0,.55)', backdropFilter: 'blur(8px)', border: '1px solid rgba(255,255,255,.08)' }} className="meta">
+              <span className="mono" style={{ color: 'var(--fg)' }}>{String(idx + 1).padStart(2, '0')}</span>
+              <span style={{ color: 'var(--fg-4)' }}> / </span>
+              <span style={{ color: 'var(--fg-3)' }}>{String(total).padStart(2, '0')}</span>
+            </div>
+
+            {decision && (
+              <div style={{ position: 'absolute', bottom: 'var(--sp-4)', left: 'var(--sp-4)' }}>
+                <DecisionBadge kind={decision} />
+              </div>
+            )}
+
+            {swipeKind && (
+              <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', pointerEvents: 'none', background: `radial-gradient(ellipse at center, color-mix(in oklab, var(--${swipeKind}) 25%, transparent), transparent 60%)` }}>
+                <div style={{ fontSize: 64, fontWeight: 800, color: `var(--${swipeKind})`, textShadow: '0 4px 20px rgba(0,0,0,.6)', letterSpacing: '-.04em', textTransform: 'uppercase' }}>{swipeKind}</div>
+              </div>
+            )}
+
+            <button onClick={() => setIdx(i => Math.max(0, i - 1))} aria-label="Previous" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', width: 40, height: 40, borderRadius: 999, background: 'rgba(0,0,0,.5)', backdropFilter: 'blur(8px)', display: 'grid', placeItems: 'center', border: '1px solid rgba(255,255,255,.08)' }}>
+              <Icon name="arrowL" size={16} />
+            </button>
+            <button onClick={() => setIdx(i => Math.min(total - 1, i + 1))} aria-label="Next" style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', width: 40, height: 40, borderRadius: 999, background: 'rgba(0,0,0,.5)', backdropFilter: 'blur(8px)', display: 'grid', placeItems: 'center', border: '1px solid rgba(255,255,255,.08)' }}>
+              <Icon name="arrowR" size={16} />
+            </button>
+
+            {idx === 0 && !decision && (
+              <div style={{ position: 'absolute', bottom: 'var(--sp-5)', left: '50%', transform: 'translateX(-50%)', display: 'none', alignItems: 'center', gap: 8, padding: '8px 14px', borderRadius: 999, background: 'rgba(0,0,0,.6)', backdropFilter: 'blur(8px)', border: '1px solid rgba(255,255,255,.08)' }} className="swipe-hint">
+                <Icon name="swipe" size={14} />
+                <span className="meta">Swipe to decide</span>
+              </div>
+            )}
+          </div>
+
+          <DecisionDock counts={counts} decision={decision} decide={decide} undo={undo} canUndo={history.length > 0} showInlineKbd={showInlineKbd} />
+
+          <div className="meta ta-c" style={{ color: 'var(--fg-3)' }}>
+            {decided > 0
+              ? <>&middot; {counts.keep} kept &middot; {counts.maybe} maybe &middot; {counts.reject} rejected &middot;</>
+              : <>&middot; Press P / M / R &middot; or swipe &middot;</>}
+          </div>
+        </div>
+
+        {/* Sidebar */}
+        <aside className="culling-side" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-4)', minWidth: 0 }}>
+          <div className="card" style={{ padding: 'var(--sp-5)' }}>
+            <div className="flex jcsb aic" style={{ marginBottom: 'var(--sp-4)' }}>
+              <div>
+                <div className="meta">Quality</div>
+                <div className="fs-xl" style={{ fontWeight: 600, marginTop: 2, fontFamily: 'var(--font-mono)', letterSpacing: 'var(--tracking-tight)' }}>
+                  {Math.round(overall * 100)}<span className="dim" style={{ fontSize: 14 }}>/100</span>
+                </div>
+              </div>
+              <span className="dbadge" style={{ color: overall >= .75 ? 'var(--keep)' : overall >= .5 ? 'var(--warning)' : 'var(--reject)' }}>
+                <span className="glyph" />
+                {overall >= .75 ? 'Strong' : overall >= .5 ? 'Mixed' : 'Weak'}
               </span>
             </div>
-          ) : (
-            filteredOrder.map(id => (
-              <FilmstripThumb
-                key={id}
-                photo={photos[id]}
-                isActive={id === currentId}
-                onClick={() => setCurrentId(id)}
-              />
-            ))
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
+              <ScoreBar value={photo.sharp} label="Sharpness" />
+              <ScoreBar value={photo.expo}  label="Exposure" />
+              <ScoreBar value={photo.noise} label="Noise" />
+              <ScoreBar value={photo.comp}  label="Composition" />
+            </div>
+          </div>
+
+          <div className="card" style={{ padding: 'var(--sp-5)' }}>
+            <div className="meta" style={{ marginBottom: 'var(--sp-4)' }}>This Session</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
+              {[{ k: 'keep', l: 'Keep', v: counts.keep }, { k: 'maybe', l: 'Maybe', v: counts.maybe }, { k: 'reject', l: 'Reject', v: counts.reject }].map(({ k, l, v }) => (
+                <div key={k} className="flex jcsb aic">
+                  <div className="flex aic gap-2">
+                    <span style={{ width: 8, height: 8, borderRadius: 99, background: `var(--${k})`, boxShadow: `0 0 6px var(--${k})` }} />
+                    <span className="fs-sm">{l}</span>
+                  </div>
+                  <span className="mono fs-md" style={{ fontWeight: 500 }}>{String(v).padStart(2, '0')}</span>
+                </div>
+              ))}
+              <div style={{ height: 1, background: 'var(--line)' }} />
+              <div className="flex jcsb aic">
+                <span className="meta">Decided</span>
+                <span className="mono fs-sm" style={{ color: 'var(--fg)' }}>{decided} / {total}</span>
+              </div>
+            </div>
+          </div>
+
+          {decided === total && (
+            <button className="btn btn-primary btn-uppercase" onClick={onComplete} style={{ height: 48 }}>
+              <span>Review export</span>
+              <Icon name="arrowR" size={14} />
+            </button>
           )}
-        </div>
+        </aside>
       </div>
+
+      {toast && (
+        <div className="toast-host">
+          <div className="toast">
+            {toast.kind === 'undo'
+              ? <><Icon name="undo" size={12} /><span>{toast.label}</span></>
+              : <><span style={{ width: 6, height: 6, borderRadius: 99, background: `var(--${toast.kind})`, boxShadow: `0 0 6px var(--${toast.kind})` }} /><span>{toast.label}</span></>}
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        @media (max-width: 900px) {
+          .culling-grid { grid-template-columns: 1fr !important; padding: 12px !important; }
+          .culling-side { display: none !important; }
+          .swipe-hint { display: inline-flex !important; }
+        }
+      `}</style>
     </div>
-  )
+  );
 }
