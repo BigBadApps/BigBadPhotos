@@ -1,4 +1,4 @@
-export default function Icon({ name, size = 18, stroke = 1.6 }) {
+export default function Icon({ name, size = 18, stroke = 1.6, style, className }) {
   const s = size;
   const sw = stroke;
   const p = { width: s, height: s, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: sw, strokeLinecap: 'round', strokeLinejoin: 'round' };
@@ -18,6 +18,9 @@ export default function Icon({ name, size = 18, stroke = 1.6 }) {
     keyboard:   <svg {...p}><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/></svg>,
     aperture:   <svg {...p}><circle cx="12" cy="12" r="9"/><path d="M12 3l4.5 7.8M12 21l-4.5-7.8M21 12l-9 0M3 12l9 0M16.5 19.8L12 12M7.5 4.2L12 12"/></svg>,
     lock:       <svg {...p}><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V8a4 4 0 1 1 8 0v3"/></svg>,
+    cog:        <svg {...p}><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4.8a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.4a7 7 0 0 0-2 1.2l-2.4-.8-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-.8a7 7 0 0 0 2 1.2L10 21h4l.5-2.4a7 7 0 0 0 2-1.2l2.4.8 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg>,
   };
-  return map[name] || null;
+  const icon = map[name] || null;
+  if (!icon || (!style && !className)) return icon;
+  return <span style={{ display: 'inline-flex', alignItems: 'center', ...style }} className={className}>{icon}</span>;
 }
