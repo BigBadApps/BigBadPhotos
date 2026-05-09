@@ -250,6 +250,34 @@ img { display: block; max-width: 100%; }
 .chip:hover { color: var(--fg); border-color: var(--line-2); }
 .chip[aria-pressed="true"] { background: var(--accent-soft); border-color: color-mix(in oklab, var(--accent) 50%, transparent); color: var(--accent); }
 
+/* Toggle */
+.toggle { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; }
+.toggle input { position: absolute; opacity: 0; width: 0; height: 0; pointer-events: none; }
+.toggle-track {
+  width: 36px; height: 20px; border-radius: 999px; flex-shrink: 0;
+  background: var(--bg-4); border: 1px solid var(--line-2);
+  transition: all .2s var(--ease-out); position: relative;
+}
+.toggle input:checked + .toggle-track { background: var(--accent); border-color: var(--accent); }
+.toggle-thumb {
+  position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--fg-3); transition: all .2s var(--ease-snap);
+}
+.toggle input:checked + .toggle-track .toggle-thumb { left: 18px; background: #000; }
+
+/* Standalone icon button */
+.iconbtn {
+  width: 32px; height: 32px; border-radius: 8px;
+  display: grid; place-items: center;
+  color: var(--fg-2); transition: all .15s var(--ease-out);
+}
+.iconbtn:hover { background: var(--bg-3); color: var(--fg); }
+
+/* Compare view hover reveals */
+.compare-panel:hover .compare-actions { opacity: 1 !important; }
+.compare-panel:hover .compare-img { opacity: 1 !important; }
+
 /* Toast */
 .toast-host { position: absolute; left: 0; right: 0; top: 64px; display: flex; justify-content: center; pointer-events: none; z-index: 30; }
 .toast {
