@@ -572,6 +572,6 @@ if __name__ == "__main__":
     port = 8443 if ssl_context else int(os.environ.get('PORT') or os.environ.get('BBP_PORT', '8001'))
     scheme = 'https' if ssl_context else 'http'
 
-    hostname = os.environ.get('BBP_HOSTNAME', '127.0.0.1')
+    hostname = os.environ.get('BBP_HOSTNAME', '0.0.0.0')
     print(f"Starting BigBadPhotos on {scheme}://{hostname}:{port}")
     app.run(debug=IS_DEBUG, host=hostname, port=port, ssl_context=ssl_context)
