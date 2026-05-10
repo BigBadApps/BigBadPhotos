@@ -33,6 +33,7 @@ if not IS_DEBUG:
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+HAS_AUTH = bool(os.environ.get('BBP_PASSWORD')) or bool(GOOGLE_CLIENT_ID) or IS_DEBUG
 
 # Lazy-import google-auth only when GOOGLE_CLIENT_ID is configured.
 # The native extension may not be available in all environments.
@@ -64,6 +65,8 @@ API_ROUTES = {'/analyze', '/rank'}
 def enforce_auth():
     if request.path not in API_ROUTES:
         return  # static files, /health, /auth/* all pass through
+    if not HAS_AUTH:
+        return  # No auth configured = open access
     if IS_DEBUG and not session.get('user'):
         # Auto-create a dev session so the UI works without credentials
         session['user'] = {'email': 'dev@local', 'name': 'Dev User', 'picture': '', 'sub': 'dev'}
@@ -130,6 +133,7 @@ def auth_config():
         'google': bool(GOOGLE_CLIENT_ID),
         'password': bool(os.environ.get('BBP_PASSWORD')),
         'dev': IS_DEBUG,
+        'open': not HAS_AUTH,
     })
 
 

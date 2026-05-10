@@ -183,14 +183,23 @@ function AuthGate({ onAuthed, authConfig }) {
             </div>
           )}
 
-          {/* No auth configured */}
+          {/* No auth configured — open access */}
           {authConfig && !authConfig.dev && !authConfig.password && !authConfig.google && (
-            <div style={{ padding: 'var(--sp-4)', borderRadius: 10, background: 'var(--bg-3)', border: '1px solid var(--line)' }}>
-              <p className="fs-sm" style={{ color: 'var(--fg-2)', textAlign: 'center' }}>No auth method configured.</p>
-              <p className="meta" style={{ marginTop: 6, textAlign: 'center' }}>
-                Set <code>BBP_PASSWORD</code>, <code>GOOGLE_CLIENT_ID</code>, or run with <code>BBP_DEBUG=1</code>.
-              </p>
-            </div>
+            <>
+              <button
+                className="btn btn-primary"
+                onClick={() => onAuthed()}
+                disabled={busy}
+                style={{ width: '100%', height: 52, fontSize: 'var(--fs-md)', fontWeight: 600, gap: 12 }}
+              >
+                <Icon name="aperture" size={18} /><span>Enter Workspace</span>
+              </button>
+              <div style={{ padding: 'var(--sp-3)', borderRadius: 8, background: 'var(--bg-3)', border: '1px solid var(--line)' }}>
+                <p className="meta" style={{ textAlign: 'center', color: 'var(--fg-3)' }}>
+                  No auth configured — open access. Set <code>BBP_PASSWORD</code> or <code>BBP_DEBUG=1</code> to restrict.
+                </p>
+              </div>
+            </>
           )}
 
           {/* Status hint */}
@@ -252,7 +261,7 @@ export default function GoogleGate({ children }) {
       fetch('/auth/config').then(r => r.ok ? r.json() : null).catch(() => null),
     ]).then(([meData, configData]) => {
       if (configData) setAuthConfig(configData);
-      if (meData?.authenticated) setAuthed(true);
+      if (meData?.authenticated || configData?.open) setAuthed(true);
     }).finally(() => setChecking(false));
   }, []);
 
