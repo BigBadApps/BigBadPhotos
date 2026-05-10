@@ -26,7 +26,8 @@ function AppContent() {
   const clearPhotos  = useStore(state => state.clearPhotos);
   const addPhotos    = useStore(state => state.addPhotos);
   const setCurrentId = useStore(state => state.setCurrentId);
-  const fileInputRef = useRef(null);
+  const fileInputRef   = useRef(null);
+  const exportInputRef = useRef(null);
   const photos       = useStore(state => state.photos);
   const order        = useStore(state => state.order);
 
@@ -75,13 +76,13 @@ function AppContent() {
     setSourceDir({ name: folder, _ios: true });
   }, [clearPhotos, addPhotos, setCurrentId, setSourceDir]);
 
-  // On iOS, auto-set a pseudo destDir so "Begin Review" can be unlocked.
-  // Export uses Web Share / sequential downloads instead of a real folder.
-  useEffect(() => {
-    if (!HAS_DIR_PICKER && !destDir) {
-      setDestDir({ name: 'Download to device', _ios: true });
-    }
-  }, []);
+  const handleExportInput = useCallback((e) => {
+    const files = Array.from(e.target.files);
+    e.target.value = '';
+    if (!files.length) return;
+    const folder = files[0].webkitRelativePath?.split('/')[0] || 'Export folder';
+    setDestDir({ name: folder, _ios: true });
+  }, [setDestDir]);
 
   const pickSource = useCallback(async () => {
     if (!HAS_DIR_PICKER) {
@@ -98,7 +99,10 @@ function AppContent() {
   }, [setSourceDir, clearPhotos]);
 
   const pickExport = useCallback(async () => {
-    if (!HAS_DIR_PICKER) return; // iOS exports via download/share — no folder needed
+    if (!HAS_DIR_PICKER) {
+      exportInputRef.current?.click();
+      return;
+    }
     try {
       const dir = await window.showDirectoryPicker({ mode: 'readwrite' });
       setDestDir(dir);
@@ -143,6 +147,14 @@ function AppContent() {
         multiple
         style={{ display: 'none' }}
         onChange={handleFileInput}
+      />
+      <input
+        ref={exportInputRef}
+        type="file"
+        webkitdirectory=""
+        multiple
+        style={{ display: 'none' }}
+        onChange={handleExportInput}
       />
       <AppBar
         view={currentView}
