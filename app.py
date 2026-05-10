@@ -12,6 +12,7 @@ from typing import Dict, List, Tuple
 try:
     from dotenv import load_dotenv
     load_dotenv()
+    load_dotenv('.env.local', override=True)
 except ImportError:
     pass
 
