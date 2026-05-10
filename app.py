@@ -1,6 +1,4 @@
 from flask import Flask, request, jsonify, send_from_directory, session
-from google.oauth2 import id_token as google_id_token
-from google.auth.transport import requests as google_requests
 import cv2
 import numpy as np
 import json
@@ -29,6 +27,21 @@ if not IS_DEBUG:
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+
+# Lazy-import google-auth only when GOOGLE_CLIENT_ID is configured.
+# The native extension may not be available in all environments.
+if GOOGLE_CLIENT_ID:
+    try:
+        from google.oauth2 import id_token as google_id_token
+        from google.auth.transport import requests as google_requests
+    except Exception as _ge:
+        print(f"⚠️  google-auth import failed: {_ge} — Google OAuth will be unavailable")
+        google_id_token = None
+        google_requests = None
+else:
+    google_id_token = None
+    google_requests = None
+
 ALLOWED_EMAILS = {
     e.strip().lower()
     for e in os.environ.get('BBP_ALLOWED_EMAILS', '').split(',')
@@ -45,6 +58,11 @@ API_ROUTES = {'/analyze', '/rank'}
 def enforce_auth():
     if request.path not in API_ROUTES:
         return  # static files, /health, /auth/* all pass through
+    if IS_DEBUG and not session.get('user'):
+        # Auto-create a dev session so the UI works without credentials
+        session['user'] = {'email': 'dev@local', 'name': 'Dev User', 'picture': '', 'sub': 'dev'}
+        session.permanent = True
+        return
     if not session.get('user'):
         return jsonify({'error': 'not_authenticated'}), 401
 
@@ -52,6 +70,9 @@ def enforce_auth():
 @app.post('/auth/google')
 def auth_google():
     """Verify Google ID token, create session if email is allowed."""
+    if not google_id_token or not GOOGLE_CLIENT_ID:
+        return jsonify({'error': 'google_oauth_not_configured'}), 400
+
     data = request.get_json(silent=True) or {}
     credential = data.get('credential')
     if not credential:
@@ -94,6 +115,35 @@ def auth_me():
     if not user:
         return jsonify({'authenticated': False}), 401
     return jsonify({'authenticated': True, 'user': user})
+
+
+@app.get('/auth/config')
+def auth_config():
+    """Return available auth methods so the frontend renders the right sign-in UI."""
+    return jsonify({
+        'google': bool(GOOGLE_CLIENT_ID),
+        'password': bool(os.environ.get('BBP_PASSWORD')),
+        'dev': IS_DEBUG,
+    })
+
+
+@app.post('/auth/password')
+def auth_password():
+    """Password-based auth using BBP_PASSWORD env var."""
+    pwd = os.environ.get('BBP_PASSWORD', '')
+    if not pwd:
+        return jsonify({'error': 'password_auth_not_configured'}), 400
+    data = request.get_json(silent=True) or {}
+    if data.get('password') != pwd:
+        return jsonify({'error': 'invalid_password'}), 401
+    session['user'] = {
+        'email': 'local@bigbadphotos',
+        'name': 'Local User',
+        'picture': '',
+        'sub': 'local',
+    }
+    session.permanent = True
+    return jsonify({'ok': True, 'user': session['user']})
 
 
 @app.route('/', defaults={'path': ''})
