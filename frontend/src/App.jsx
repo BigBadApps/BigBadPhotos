@@ -139,8 +139,8 @@ function AppContent() {
       <input
         ref={fileInputRef}
         type="file"
+        webkitdirectory=""
         multiple
-        accept="image/*,.raw,.arw,.cr2,.cr3,.nef,.dng,.orf,.rw2,.raf,.tif,.tiff"
         style={{ display: 'none' }}
         onChange={handleFileInput}
       />
