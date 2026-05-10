@@ -79,8 +79,7 @@ function AppContent() {
   const handleExportInput = useCallback((e) => {
     const files = Array.from(e.target.files);
     e.target.value = '';
-    if (!files.length) return;
-    const folder = files[0].webkitRelativePath?.split('/')[0] || 'Export folder';
+    const folder = files[0]?.webkitRelativePath?.split('/')[0] || 'Export folder';
     setDestDir({ name: folder, _ios: true });
   }, [setDestDir]);
 
