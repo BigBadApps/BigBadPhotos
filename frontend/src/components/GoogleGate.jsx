@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Icon from './Icon';
 
 function GoogleMark({ size = 20 }) {
@@ -11,24 +11,59 @@ function GoogleMark({ size = 20 }) {
   );
 }
 
-function AuthGate({ onAuthed }) {
+function Spinner() {
+  return (
+    <span style={{
+      width: 16, height: 16, borderRadius: '50%',
+      border: '2px solid var(--line-2)', borderTopColor: 'var(--accent)',
+      animation: 'bbp-spin .7s linear infinite',
+      display: 'inline-block', flexShrink: 0,
+    }} />
+  );
+}
+
+function AuthGate({ onAuthed, authConfig }) {
   const [state, setState] = useState('default');
   const [hint, setHint] = useState('');
+  const [password, setPassword] = useState('');
 
-  function trySignIn(scenario) {
+  async function tryPassword(e) {
+    e?.preventDefault();
+    if (!password.trim()) return;
     setState('loading');
-    setHint('Verifying with provider…');
-    setTimeout(() => {
-      if (scenario === 'error') {
-        setState('error');
-        setHint("This account isn't on the allowlist. Contact the project owner to request access.");
-      } else {
+    setHint('Verifying…');
+    try {
+      const res = await fetch('/auth/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+      const data = await res.json();
+      if (res.ok) {
         setState('success');
         setHint('Authenticated. Loading workspace…');
-        setTimeout(() => onAuthed(), 900);
+        setTimeout(() => onAuthed(), 500);
+      } else {
+        setState('error');
+        setHint(
+          data.error === 'invalid_password'
+            ? 'Incorrect password. Try again.'
+            : 'Authentication failed — check server configuration.',
+        );
       }
-    }, 1000);
+    } catch {
+      setState('error');
+      setHint('Could not reach the server. Is it running?');
+    }
   }
+
+  function tryDev() {
+    setState('success');
+    setHint('Dev mode — entering workspace…');
+    setTimeout(() => onAuthed(), 400);
+  }
+
+  const busy = state === 'loading' || state === 'success';
 
   return (
     <div
@@ -78,39 +113,90 @@ function AuthGate({ onAuthed }) {
             </div>
           </div>
 
-          <button
-            className="btn"
-            onClick={() => trySignIn('ok')}
-            disabled={state === 'loading' || state === 'success'}
-            style={{
-              width: '100%', height: 52,
-              background: 'var(--bg-3)', color: 'var(--fg)',
-              border: '1px solid var(--line-2)', borderRadius: 12,
-              fontSize: 'var(--fs-md)', fontWeight: 600, gap: 12,
-              transition: 'all .2s var(--ease-out)',
-            }}
-          >
-            {state === 'loading' ? (
-              <>
-                <span style={{ width: 16, height: 16, borderRadius: '50%', border: '2px solid var(--line-2)', borderTopColor: 'var(--accent)', animation: 'bbp-spin .7s linear infinite', display: 'inline-block', flexShrink: 0 }} />
-                <span>Authenticating…</span>
-              </>
-            ) : state === 'success' ? (
-              <><Icon name="check" size={18} /><span>Authenticated</span></>
-            ) : (
-              <><GoogleMark size={20} /><span>Continue with Google</span></>
-            )}
-          </button>
+          {/* Dev mode bypass */}
+          {authConfig?.dev && (
+            <button
+              className="btn"
+              onClick={tryDev}
+              disabled={busy}
+              style={{
+                width: '100%', height: 52,
+                background: 'color-mix(in oklab, var(--accent) 12%, var(--bg-3))',
+                color: 'var(--fg)',
+                border: '1px solid color-mix(in oklab, var(--accent) 30%, var(--line))',
+                borderRadius: 12, fontSize: 'var(--fs-md)', fontWeight: 600, gap: 12,
+              }}
+            >
+              {state === 'loading' ? <><Spinner /><span>Loading…</span></> : <><Icon name="aperture" size={18} /><span>Continue (Dev Mode)</span></>}
+            </button>
+          )}
 
-          <div className="fs-xs dim" style={{ textAlign: 'center', lineHeight: 1.5 }}>
-            You'll sign in with your Google account.<br />
-            Only invited collaborators can access this workspace.
-          </div>
+          {/* Password form */}
+          {authConfig?.password && (
+            <form onSubmit={tryPassword} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
+              <input
+                type="password"
+                value={password}
+                onChange={e => { setPassword(e.target.value); if (state === 'error') setState('default'); }}
+                placeholder="Enter access password"
+                disabled={busy}
+                autoFocus
+                style={{
+                  height: 48, padding: '0 14px', borderRadius: 10,
+                  background: 'var(--bg-3)', border: `1px solid ${state === 'error' ? 'color-mix(in oklab, var(--reject) 60%, var(--line))' : 'var(--line)'}`,
+                  color: 'var(--fg)', fontSize: 'var(--fs-md)',
+                  outline: 'none', width: '100%',
+                }}
+              />
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={busy || !password.trim()}
+                style={{ height: 52, width: '100%', fontSize: 'var(--fs-md)', fontWeight: 600, gap: 12 }}
+              >
+                {state === 'loading' ? <><Spinner /><span>Signing in…</span></>
+                  : state === 'success' ? <><Icon name="check" size={18} /><span>Authenticated</span></>
+                  : 'Sign In'}
+              </button>
+            </form>
+          )}
 
-          {hint && state !== 'default' && (
+          {/* Google OAuth (visual placeholder — requires @react-oauth/google + VITE_GOOGLE_CLIENT_ID) */}
+          {authConfig?.google && !authConfig?.password && !authConfig?.dev && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
+              <button
+                className="btn"
+                disabled
+                style={{
+                  width: '100%', height: 52,
+                  background: 'var(--bg-3)', color: 'var(--fg)',
+                  border: '1px solid var(--line-2)', borderRadius: 12,
+                  fontSize: 'var(--fs-md)', fontWeight: 600, gap: 12,
+                  opacity: .6,
+                }}
+              >
+                <GoogleMark size={20} /><span>Continue with Google</span>
+              </button>
+              <p className="fs-xxs dim" style={{ textAlign: 'center' }}>
+                Google OAuth requires <code>@react-oauth/google</code> — see AGENTS.md
+              </p>
+            </div>
+          )}
+
+          {/* No auth configured */}
+          {authConfig && !authConfig.dev && !authConfig.password && !authConfig.google && (
+            <div style={{ padding: 'var(--sp-4)', borderRadius: 10, background: 'var(--bg-3)', border: '1px solid var(--line)' }}>
+              <p className="fs-sm" style={{ color: 'var(--fg-2)', textAlign: 'center' }}>No auth method configured.</p>
+              <p className="meta" style={{ marginTop: 6, textAlign: 'center' }}>
+                Set <code>BBP_PASSWORD</code>, <code>GOOGLE_CLIENT_ID</code>, or run with <code>BBP_DEBUG=1</code>.
+              </p>
+            </div>
+          )}
+
+          {/* Status hint */}
+          {hint && (
             <div style={{
-              padding: '12px 14px', borderRadius: 10,
-              border: '1px solid',
+              padding: '12px 14px', borderRadius: 10, border: '1px solid',
               borderColor: state === 'error' ? 'color-mix(in oklab, var(--reject) 50%, var(--line))' : 'var(--line)',
               background: state === 'error' ? 'color-mix(in oklab, var(--reject) 8%, var(--bg-2))' : 'var(--bg-2)',
               display: 'flex', gap: 10, alignItems: 'flex-start',
@@ -122,32 +208,55 @@ function AuthGate({ onAuthed }) {
             </div>
           )}
 
-          {state === 'default' && (
-            <div style={{ borderTop: '1px dashed var(--line)', paddingTop: 'var(--sp-4)', display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between' }}>
-              <span className="meta">Demo</span>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button className="chip" onClick={() => trySignIn('error')}>Try unauthorized</button>
-                <button className="chip" onClick={() => trySignIn('ok')}>Try success</button>
-              </div>
-            </div>
-          )}
+          <div className="fs-xs dim" style={{ textAlign: 'center', lineHeight: 1.5 }}>
+            Only invited collaborators can access this workspace.
+          </div>
         </div>
 
         <div style={{ display: 'flex', gap: 16, alignItems: 'center', color: 'var(--fg-4)', fontSize: 'var(--fs-xxs)' }}>
           <span className="mono upper">BigBadPhotos &middot; Studio</span>
-          <span>&middot;</span>
-          <a href="#" style={{ color: 'var(--fg-3)' }}>Privacy</a>
-          <span>&middot;</span>
-          <a href="#" style={{ color: 'var(--fg-3)' }}>Status</a>
         </div>
       </div>
+
       <style>{`@keyframes bbp-spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+function Splash() {
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
+        <div style={{ width: 48, height: 48, borderRadius: 12, display: 'grid', placeItems: 'center', background: 'var(--bg-2)', border: '1px solid var(--line)' }}>
+          <Icon name="aperture" size={24} />
+        </div>
+        <div style={{ width: 80, height: 3, borderRadius: 99, overflow: 'hidden', background: 'var(--bg-3)' }}>
+          <div style={{ width: '50%', height: '100%', background: 'var(--accent)', animation: 'bbp-slide 1.2s ease-in-out infinite' }} />
+        </div>
+      </div>
+      <style>{`
+        @keyframes bbp-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(220%); } }
+      `}</style>
     </div>
   );
 }
 
 export default function GoogleGate({ children }) {
   const [authed, setAuthed] = useState(false);
+  const [checking, setChecking] = useState(true);
+  const [authConfig, setAuthConfig] = useState(null);
+
+  useEffect(() => {
+    Promise.all([
+      fetch('/auth/me').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('/auth/config').then(r => r.ok ? r.json() : null).catch(() => null),
+    ]).then(([meData, configData]) => {
+      if (configData) setAuthConfig(configData);
+      if (meData?.authenticated) setAuthed(true);
+    }).finally(() => setChecking(false));
+  }, []);
+
+  if (checking) return <Splash />;
   if (authed) return children;
-  return <AuthGate onAuthed={() => setAuthed(true)} />;
+  return <AuthGate onAuthed={() => setAuthed(true)} authConfig={authConfig} />;
 }

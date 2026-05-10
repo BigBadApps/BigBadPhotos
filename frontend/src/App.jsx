@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
+import { useStore } from './store';
 import GoogleGate from './components/GoogleGate';
 import AppBar from './components/AppBar';
 import HelpOverlay from './components/HelpOverlay';
@@ -7,21 +8,31 @@ import LandingView from './views/LandingView';
 import CullingView from './views/CullingView';
 import CompareView from './views/CompareView';
 import ReviewExportView from './views/ReviewExportView';
+import { usePhotoLoader } from './hooks/usePhotoLoader';
+import { usePhotoRanker } from './hooks/usePhotoRanker';
+import { useSessionPersistence } from './hooks/useSessionPersistence';
+
+const HAS_DIR_PICKER = typeof window !== 'undefined' && 'showDirectoryPicker' in window;
 
 function AppContent() {
   const navigate = useNavigate();
   const location = useLocation();
   const [help, setHelp] = useState(false);
-  const [landing, setLanding] = useState({
-    source: '',
-    exportTarget: '',
-    total: 1247,
-    fileType: 'RAW + JPG',
-    scored: 0,
-  });
 
-  const currentView = location.pathname === '/' ? 'landing'
-    : location.pathname === '/cull' ? 'culling'
+  const sourceDir    = useStore(state => state.sourceDir);
+  const destDir      = useStore(state => state.destDir);
+  const setSourceDir = useStore(state => state.setSourceDir);
+  const setDestDir   = useStore(state => state.setDestDir);
+  const clearPhotos  = useStore(state => state.clearPhotos);
+  const photos       = useStore(state => state.photos);
+  const order        = useStore(state => state.order);
+
+  const { loading: photoLoading, loadingComplete, loadedCount, totalCount, loadError } = usePhotoLoader();
+  const { scoring, scoredCount, scoreError, backendAvailable, scoreableCount } = usePhotoRanker(loadingComplete);
+  useSessionPersistence(loadingComplete);
+
+  const currentView = location.pathname === '/'        ? 'landing'
+    : location.pathname === '/cull'    ? 'culling'
     : location.pathname === '/compare' ? 'compare'
     : 'export';
 
@@ -35,22 +46,53 @@ function AppContent() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const simulateScoring = useCallback(() => {
-    const id = setInterval(() => {
-      setLanding(s => {
-        if (s.scored >= s.total) { clearInterval(id); return s; }
-        const inc = Math.max(20, Math.round(s.total * 0.05));
-        return { ...s, scored: Math.min(s.scored + inc, s.total) };
-      });
-    }, 180);
-  }, []);
+  const pickSource = useCallback(async () => {
+    if (!HAS_DIR_PICKER) return;
+    try {
+      const dir = await window.showDirectoryPicker({ mode: 'read' });
+      clearPhotos();
+      setSourceDir(dir);
+    } catch (err) {
+      if (err.name !== 'AbortError') console.error('Source picker:', err);
+    }
+  }, [setSourceDir, clearPhotos]);
 
-  function pickSource() {
-    setLanding(s => ({ ...s, source: '~/Pictures/2026-05-09 Session' }));
-  }
-  function pickExport() {
-    setLanding(s => ({ ...s, exportTarget: '~/Exports/Session · Selects' }));
-  }
+  const pickExport = useCallback(async () => {
+    if (!HAS_DIR_PICKER) return;
+    try {
+      const dir = await window.showDirectoryPicker({ mode: 'readwrite' });
+      setDestDir(dir);
+    } catch (err) {
+      if (err.name !== 'AbortError') console.error('Export picker:', err);
+    }
+  }, [setDestDir]);
+
+  // Derive file type label from loaded photos
+  const rawCount = Object.values(photos).filter(p => p.isRaw).length;
+  const webCount = Object.values(photos).filter(p => !p.isRaw).length;
+  const fileType = rawCount > 0 && webCount > 0 ? 'RAW + JPG'
+    : rawCount > 0 ? 'RAW'
+    : webCount > 0 ? 'JPG / PNG'
+    : '—';
+
+  const landingState = {
+    source:          sourceDir?.name || '',
+    exportTarget:    destDir?.name   || '',
+    total:           totalCount || order.length,
+    fileType,
+    scored:          scoredCount,
+    scoreableCount,
+    isLoading:       photoLoading,
+    loadingComplete,
+    loadedCount,
+    loadError,
+    scoring,
+    scoreError,
+    backendAvailable,
+    hasPhotos:       order.length > 0,
+  };
+
+  const hasPhotos = order.length > 0;
 
   return (
     <div className="app-root">
@@ -59,26 +101,21 @@ function AppContent() {
         step={stepMap[currentView]}
         totalSteps={5}
         onHelp={() => setHelp(true)}
-        projectName={landing.source ? landing.source.split('/').pop() : null}
+        projectName={sourceDir?.name || null}
       />
       <div style={{ flex: 1, position: 'relative', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <Routes>
           <Route path="/" element={
             <LandingView
-              state={landing}
+              state={landingState}
               onSelectSource={pickSource}
               onSelectExport={pickExport}
-              onSimulateScoring={simulateScoring}
               onBegin={() => navigate('/cull')}
             />
           } />
-          <Route path="/cull" element={
-            landing.source
-              ? <CullingView feedbackIntensity="pronounced" showInlineKbd onComplete={() => navigate('/review')} />
-              : <Navigate to="/" />
-          } />
-          <Route path="/compare" element={landing.source ? <CompareView /> : <Navigate to="/" />} />
-          <Route path="/review"  element={landing.source ? <ReviewExportView /> : <Navigate to="/" />} />
+          <Route path="/cull"    element={hasPhotos ? <CullingView feedbackIntensity="pronounced" showInlineKbd onComplete={() => navigate('/review')} /> : <Navigate to="/" />} />
+          <Route path="/compare" element={hasPhotos ? <CompareView /> : <Navigate to="/" />} />
+          <Route path="/review"  element={hasPhotos ? <ReviewExportView /> : <Navigate to="/" />} />
         </Routes>
         <HelpOverlay open={help} onClose={() => setHelp(false)} />
       </div>
@@ -90,7 +127,12 @@ function AppContent() {
         backdropFilter: 'blur(12px)', border: '1px solid var(--line)',
         borderRadius: 999, zIndex: 40, boxShadow: 'var(--shadow-2)',
       }}>
-        {[['/', 'Landing'], ['/cull', 'Culling']].map(([path, label]) => (
+        {[
+          ['/', 'Landing'],
+          ['/cull', 'Culling'],
+          ['/compare', 'Compare'],
+          ['/review', 'Export'],
+        ].map(([path, label]) => (
           <button
             key={path}
             onClick={() => navigate(path)}

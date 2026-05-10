@@ -45,6 +45,11 @@ API_ROUTES = {'/analyze', '/rank'}
 def enforce_auth():
     if request.path not in API_ROUTES:
         return  # static files, /health, /auth/* all pass through
+    if IS_DEBUG and not session.get('user'):
+        # Auto-create a dev session so the UI works without credentials
+        session['user'] = {'email': 'dev@local', 'name': 'Dev User', 'picture': '', 'sub': 'dev'}
+        session.permanent = True
+        return
     if not session.get('user'):
         return jsonify({'error': 'not_authenticated'}), 401
 
@@ -94,6 +99,35 @@ def auth_me():
     if not user:
         return jsonify({'authenticated': False}), 401
     return jsonify({'authenticated': True, 'user': user})
+
+
+@app.get('/auth/config')
+def auth_config():
+    """Return available auth methods so the frontend renders the right sign-in UI."""
+    return jsonify({
+        'google': bool(GOOGLE_CLIENT_ID),
+        'password': bool(os.environ.get('BBP_PASSWORD')),
+        'dev': IS_DEBUG,
+    })
+
+
+@app.post('/auth/password')
+def auth_password():
+    """Password-based auth using BBP_PASSWORD env var."""
+    pwd = os.environ.get('BBP_PASSWORD', '')
+    if not pwd:
+        return jsonify({'error': 'password_auth_not_configured'}), 400
+    data = request.get_json(silent=True) or {}
+    if data.get('password') != pwd:
+        return jsonify({'error': 'invalid_password'}), 401
+    session['user'] = {
+        'email': 'local@bigbadphotos',
+        'name': 'Local User',
+        'picture': '',
+        'sub': 'local',
+    }
+    session.permanent = True
+    return jsonify({'ok': True, 'user': session['user']})
 
 
 @app.route('/', defaults={'path': ''})

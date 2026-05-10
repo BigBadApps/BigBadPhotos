@@ -7,6 +7,7 @@ const RANK_BATCH_SIZE = 100 // stay under backend's 200 limit with headroom
 export function usePhotoRanker(loadingComplete) {
   const photos = useStore(state => state.photos)
   const order = useStore(state => state.order)
+  const sourceDir = useStore(state => state.sourceDir)
   const batchUpdateScores = useStore(state => state.batchUpdateScores)
 
   const [scoring, setScoring] = useState(false)
@@ -15,6 +16,14 @@ export function usePhotoRanker(loadingComplete) {
   const [backendAvailable, setBackendAvailable] = useState(true)
 
   const ranRef = useRef(false)
+
+  // Reset when the user picks a new source folder so scoring re-runs
+  useEffect(() => {
+    ranRef.current = false
+    setScoredCount(0)
+    setScoreError(null)
+    setBackendAvailable(true)
+  }, [sourceDir])
 
   useEffect(() => {
     // Only run once after the loader reports it's done

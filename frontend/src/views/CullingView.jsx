@@ -1,32 +1,23 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useStore } from '../store';
 import Icon from '../components/Icon';
 import ScoreBar from '../components/ScoreBar';
 import DecisionBadge from '../components/DecisionBadge';
 
-const SAMPLE_PHOTOS = [
-  { id: 'IMG_4421.ARW', burst: 'A', sharp: 0.92, expo: 0.78, noise: 0.88, comp: 0.71, hue: 28 },
-  { id: 'IMG_4422.ARW', burst: 'A', sharp: 0.71, expo: 0.74, noise: 0.85, comp: 0.66, hue: 30 },
-  { id: 'IMG_4423.ARW', burst: 'A', sharp: 0.45, expo: 0.62, noise: 0.81, comp: 0.58, hue: 32 },
-  { id: 'IMG_4424.ARW', burst: 'B', sharp: 0.88, expo: 0.91, noise: 0.92, comp: 0.84, hue: 195 },
-  { id: 'IMG_4425.ARW', burst: 'B', sharp: 0.65, expo: 0.83, noise: 0.79, comp: 0.72, hue: 200 },
-  { id: 'IMG_4426.ARW', burst: 'C', sharp: 0.31, expo: 0.42, noise: 0.55, comp: 0.40, hue: 12 },
-  { id: 'IMG_4427.ARW', burst: 'C', sharp: 0.58, expo: 0.66, noise: 0.71, comp: 0.62, hue: 14 },
-  { id: 'IMG_4428.ARW', burst: 'D', sharp: 0.94, expo: 0.81, noise: 0.89, comp: 0.91, hue: 270 },
-  { id: 'IMG_4429.ARW', burst: 'D', sharp: 0.52, expo: 0.58, noise: 0.66, comp: 0.55, hue: 268 },
-  { id: 'IMG_4430.ARW', burst: 'E', sharp: 0.79, expo: 0.85, noise: 0.83, comp: 0.78, hue: 95 },
-  { id: 'IMG_4431.ARW', burst: 'E', sharp: 0.82, expo: 0.79, noise: 0.81, comp: 0.80, hue: 92 },
-  { id: 'IMG_4432.ARW', burst: 'F', sharp: 0.41, expo: 0.49, noise: 0.61, comp: 0.46, hue: 350 },
-];
+function filenameHue(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0xFFFF;
+  return h % 360;
+}
 
-function PhotoArt({ photo, flash }) {
-  const h = photo.hue;
+function PhotoArt({ hue, flash }) {
   return (
     <div style={{
       position: 'absolute', inset: 0,
       background: `
-        radial-gradient(ellipse at 30% 20%, oklch(72% 0.15 ${h}) 0%, transparent 55%),
-        radial-gradient(ellipse at 70% 80%, oklch(35% 0.10 ${(h + 40) % 360}) 0%, transparent 60%),
-        linear-gradient(135deg, oklch(20% 0.04 ${h}) 0%, oklch(12% 0.03 ${(h + 180) % 360}) 100%)
+        radial-gradient(ellipse at 30% 20%, oklch(72% 0.15 ${hue}) 0%, transparent 55%),
+        radial-gradient(ellipse at 70% 80%, oklch(35% 0.10 ${(hue + 40) % 360}) 0%, transparent 60%),
+        linear-gradient(135deg, oklch(20% 0.04 ${hue}) 0%, oklch(12% 0.03 ${(hue + 180) % 360}) 100%)
       `,
       transition: 'filter .25s var(--ease-out)',
       filter: flash ? 'brightness(1.15) saturate(1.1)' : 'none',
@@ -37,11 +28,13 @@ function PhotoArt({ photo, flash }) {
         mixBlendMode: 'overlay',
       }} />
       <div style={{
-        position: 'absolute', left: '50%', top: '55%', transform: 'translate(-50%, -50%)',
-        width: '34%', height: '50%',
-        background: `radial-gradient(ellipse, oklch(60% 0.12 ${h}) 0%, transparent 70%)`,
-        opacity: .7, filter: 'blur(1px)',
-      }} />
+        position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
+        color: 'rgba(255,255,255,.4)',
+      }}>
+        <Icon name="image" size={40} stroke={1.2} />
+        <span style={{ fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', fontFamily: 'var(--font-mono)' }}>RAW</span>
+      </div>
     </div>
   );
 }
@@ -64,8 +57,7 @@ function DecisionDock({ counts, decision, decide, undo, canUndo, showInlineKbd }
           height: 56, borderRadius: 10, background: 'var(--bg-3)', border: '1px solid var(--line)',
           display: 'grid', placeItems: 'center',
           color: canUndo ? 'var(--fg-2)' : 'var(--fg-4)',
-          cursor: canUndo ? 'pointer' : 'not-allowed',
-          transition: 'all .15s',
+          cursor: canUndo ? 'pointer' : 'not-allowed', transition: 'all .15s',
         }}
       >
         <Icon name="undo" size={16} />
@@ -107,54 +99,52 @@ function DecisionDock({ counts, decision, decide, undo, canUndo, showInlineKbd }
   );
 }
 
-export default function CullingView({ feedbackIntensity = 'pronounced', showInlineKbd = true, onComplete, photos }) {
-  const photoList = (photos && photos.length) ? photos : SAMPLE_PHOTOS;
-  const [idx, setIdx] = useState(0);
-  const [decisions, setDecisions] = useState({});
-  const [history, setHistory] = useState([]);
+export default function CullingView({ feedbackIntensity = 'pronounced', showInlineKbd = true, onComplete }) {
+  const photos       = useStore(state => state.photos);
+  const order        = useStore(state => state.order);
+  const currentId    = useStore(state => state.currentId);
+  const setCurrentId = useStore(state => state.setCurrentId);
+  const makeDecision = useStore(state => state.makeDecision);
+  const undoAction   = useStore(state => state.undo);
+  const historyLen   = useStore(state => state.history.length);
+
   const [flashKind, setFlashKind] = useState(null);
   const [toast, setToast] = useState(null);
   const [swipeDx, setSwipeDx] = useState(0);
   const [swipeDy, setSwipeDy] = useState(0);
   const [swiping, setSwiping] = useState(false);
-  const photo = photoList[idx];
 
-  const counts = {
-    keep:   Object.values(decisions).filter(d => d === 'keep').length,
-    maybe:  Object.values(decisions).filter(d => d === 'maybe').length,
-    reject: Object.values(decisions).filter(d => d === 'reject').length,
-  };
-  const decided = counts.keep + counts.maybe + counts.reject;
-  const total = photoList.length;
-  const progress = (decided / total) * 100;
+  // Derive index from currentId; fall back to 0
+  const idx = Math.max(0, order.indexOf(currentId));
+  const photoId = order[idx] || order[0];
+  const photo = photos[photoId];
+
+  const goTo = useCallback((newIdx) => {
+    const clamped = Math.max(0, Math.min(order.length - 1, newIdx));
+    setCurrentId(order[clamped]);
+  }, [order, setCurrentId]);
 
   const decide = useCallback((kind) => {
-    const prev = decisions[photo.id];
-    setDecisions(d => ({ ...d, [photo.id]: kind }));
-    setHistory(h => [...h, { id: photo.id, prev }]);
+    if (!photoId) return;
+    makeDecision(photoId, kind);
     setFlashKind(kind);
     setTimeout(() => setFlashKind(null), feedbackIntensity === 'pronounced' ? 320 : 180);
     setToast({ kind, label: { keep: 'Kept', maybe: 'Maybe', reject: 'Rejected' }[kind] });
     setTimeout(() => setToast(null), 1100);
     if (navigator.vibrate) navigator.vibrate(kind === 'reject' ? [12, 40, 12] : 18);
-    setTimeout(() => setIdx(i => Math.min(i + 1, photoList.length - 1)), 250);
-  }, [decisions, photo, feedbackIntensity, photoList.length]);
+    setTimeout(() => goTo(idx + 1), 250);
+  }, [photoId, idx, makeDecision, feedbackIntensity, goTo]);
 
   const undo = useCallback(() => {
+    const { history, order: ord } = useStore.getState();
     if (!history.length) return;
     const last = history[history.length - 1];
-    setHistory(h => h.slice(0, -1));
-    setDecisions(d => {
-      const next = { ...d };
-      if (last.prev) next[last.id] = last.prev;
-      else delete next[last.id];
-      return next;
-    });
-    const i = photoList.findIndex(p => p.id === last.id);
-    if (i >= 0) setIdx(i);
+    undoAction();
+    const i = ord.indexOf(last.id);
+    if (i >= 0) setCurrentId(ord[i]);
     setToast({ kind: 'undo', label: 'Undone' });
     setTimeout(() => setToast(null), 900);
-  }, [history, photoList]);
+  }, [undoAction, setCurrentId]);
 
   useEffect(() => {
     function onKey(e) {
@@ -163,13 +153,13 @@ export default function CullingView({ feedbackIntensity = 'pronounced', showInli
       if (k === 'p') { e.preventDefault(); decide('keep'); }
       else if (k === 'm') { e.preventDefault(); decide('maybe'); }
       else if (k === 'r') { e.preventDefault(); decide('reject'); }
-      else if (k === 'arrowright') setIdx(i => Math.min(i + 1, total - 1));
-      else if (k === 'arrowleft')  setIdx(i => Math.max(i - 1, 0));
+      else if (k === 'arrowright') goTo(idx + 1);
+      else if (k === 'arrowleft')  goTo(idx - 1);
       else if ((e.metaKey || e.ctrlKey) && k === 'z') { e.preventDefault(); undo(); }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [decide, undo, total]);
+  }, [decide, undo, goTo, idx]);
 
   const touchRef = useRef({ x: 0, y: 0, active: false });
   function onTouchStart(e) {
@@ -192,8 +182,34 @@ export default function CullingView({ feedbackIntensity = 'pronounced', showInli
     else if (-dy > T && ay > ax) decide('maybe');
   }
 
-  const overall = (photo.sharp + photo.expo + photo.noise + photo.comp) / 4;
-  const decision = decisions[photo.id];
+  if (order.length === 0 || !photo) {
+    return (
+      <div className="view" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ textAlign: 'center', color: 'var(--fg-3)' }}>
+          <Icon name="image" size={48} stroke={1.2} />
+          <p className="fs-sm" style={{ marginTop: 12 }}>No photos loaded. Go back and select a source folder.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Score values (may be null before scoring completes)
+  const sharp   = photo.sharpness            ?? null;
+  const expo    = photo.exposure?.score      ?? null;
+  const noise   = photo.noise?.score         ?? null;
+  const comp    = photo.composition?.score   ?? null;
+  const overall = photo.overallScore         ?? (sharp != null ? (sharp + (expo ?? 0) + (noise ?? 0) + (comp ?? 0)) / 4 : null);
+
+  const hue = filenameHue(photo.filename || photo.id);
+  const decision = photo.decision;
+  const total = order.length;
+  const decided = Object.values(photos).filter(p => p.decision != null).length;
+  const progress = total > 0 ? (decided / total) * 100 : 0;
+  const counts = {
+    keep:   Object.values(photos).filter(p => p.decision === 'keep').length,
+    maybe:  Object.values(photos).filter(p => p.decision === 'maybe').length,
+    reject: Object.values(photos).filter(p => p.decision === 'reject').length,
+  };
 
   const swipeKind = (() => {
     if (!swiping) return null;
@@ -202,6 +218,10 @@ export default function CullingView({ feedbackIntensity = 'pronounced', showInli
     if (-swipeDy > 30 && ay > ax) return 'maybe';
     return null;
   })();
+
+  const burstLabel = photo.burstGroup != null
+    ? `Burst ${photo.burstGroup}`
+    : photo.isRaw ? 'RAW' : photo.filename?.split('.').pop()?.toUpperCase() || 'JPG';
 
   return (
     <div className="view culling-view" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -231,39 +251,66 @@ export default function CullingView({ feedbackIntensity = 'pronounced', showInli
               touchAction: 'none',
             }}
           >
-            <PhotoArt photo={photo} flash={!!flashKind} />
+            {/* Photo or art */}
+            {photo.url ? (
+              <img
+                src={photo.url}
+                alt={photo.filename || ''}
+                style={{
+                  position: 'absolute', inset: 0, width: '100%', height: '100%',
+                  objectFit: 'contain', background: 'var(--bg-2)',
+                  filter: flashKind ? 'brightness(1.08)' : 'none',
+                  transition: 'filter .2s',
+                }}
+              />
+            ) : (
+              <PhotoArt hue={hue} flash={!!flashKind} />
+            )}
 
+            {/* Filename + burst badge */}
             <div style={{ position: 'absolute', top: 'var(--sp-4)', left: 'var(--sp-4)', display: 'flex', gap: 8, alignItems: 'center', padding: '6px 10px', borderRadius: 999, background: 'rgba(0,0,0,.55)', backdropFilter: 'blur(8px)', border: '1px solid rgba(255,255,255,.08)' }}>
-              <span className="mono fs-xxs" style={{ color: 'var(--fg)' }}>{photo.id}</span>
+              <span className="mono fs-xxs" style={{ color: 'var(--fg)' }}>{photo.filename || photo.id}</span>
               <span style={{ color: 'var(--fg-4)' }}>&middot;</span>
-              <span className="meta">Burst {photo.burst}</span>
+              <span className="meta">{burstLabel}</span>
             </div>
 
+            {/* Position counter */}
             <div style={{ position: 'absolute', top: 'var(--sp-4)', right: 'var(--sp-4)', padding: '6px 10px', borderRadius: 999, background: 'rgba(0,0,0,.55)', backdropFilter: 'blur(8px)', border: '1px solid rgba(255,255,255,.08)' }} className="meta">
               <span className="mono" style={{ color: 'var(--fg)' }}>{String(idx + 1).padStart(2, '0')}</span>
               <span style={{ color: 'var(--fg-4)' }}> / </span>
               <span style={{ color: 'var(--fg-3)' }}>{String(total).padStart(2, '0')}</span>
             </div>
 
+            {/* Burst best badge */}
+            {photo.isBurstBest && (
+              <div style={{ position: 'absolute', top: 'var(--sp-4)', left: '50%', transform: 'translateX(-50%)', padding: '4px 10px', borderRadius: 999, background: 'rgba(0,0,0,.55)', backdropFilter: 'blur(8px)', border: '1px solid rgba(255,255,255,.08)' }} className="meta">
+                <span style={{ color: 'var(--keep)' }}>★ Best</span>
+              </div>
+            )}
+
+            {/* Decision badge */}
             {decision && (
               <div style={{ position: 'absolute', bottom: 'var(--sp-4)', left: 'var(--sp-4)' }}>
                 <DecisionBadge kind={decision} />
               </div>
             )}
 
+            {/* Swipe overlay */}
             {swipeKind && (
               <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', pointerEvents: 'none', background: `radial-gradient(ellipse at center, color-mix(in oklab, var(--${swipeKind}) 25%, transparent), transparent 60%)` }}>
                 <div style={{ fontSize: 64, fontWeight: 800, color: `var(--${swipeKind})`, textShadow: '0 4px 20px rgba(0,0,0,.6)', letterSpacing: '-.04em', textTransform: 'uppercase' }}>{swipeKind}</div>
               </div>
             )}
 
-            <button onClick={() => setIdx(i => Math.max(0, i - 1))} aria-label="Previous" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', width: 40, height: 40, borderRadius: 999, background: 'rgba(0,0,0,.5)', backdropFilter: 'blur(8px)', display: 'grid', placeItems: 'center', border: '1px solid rgba(255,255,255,.08)' }}>
+            {/* Nav arrows */}
+            <button onClick={() => goTo(idx - 1)} aria-label="Previous" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', width: 40, height: 40, borderRadius: 999, background: 'rgba(0,0,0,.5)', backdropFilter: 'blur(8px)', display: 'grid', placeItems: 'center', border: '1px solid rgba(255,255,255,.08)' }}>
               <Icon name="arrowL" size={16} />
             </button>
-            <button onClick={() => setIdx(i => Math.min(total - 1, i + 1))} aria-label="Next" style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', width: 40, height: 40, borderRadius: 999, background: 'rgba(0,0,0,.5)', backdropFilter: 'blur(8px)', display: 'grid', placeItems: 'center', border: '1px solid rgba(255,255,255,.08)' }}>
+            <button onClick={() => goTo(idx + 1)} aria-label="Next" style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', width: 40, height: 40, borderRadius: 999, background: 'rgba(0,0,0,.5)', backdropFilter: 'blur(8px)', display: 'grid', placeItems: 'center', border: '1px solid rgba(255,255,255,.08)' }}>
               <Icon name="arrowR" size={16} />
             </button>
 
+            {/* Swipe hint (mobile) */}
             {idx === 0 && !decision && (
               <div style={{ position: 'absolute', bottom: 'var(--sp-5)', left: '50%', transform: 'translateX(-50%)', display: 'none', alignItems: 'center', gap: 8, padding: '8px 14px', borderRadius: 999, background: 'rgba(0,0,0,.6)', backdropFilter: 'blur(8px)', border: '1px solid rgba(255,255,255,.08)' }} className="swipe-hint">
                 <Icon name="swipe" size={14} />
@@ -272,7 +319,7 @@ export default function CullingView({ feedbackIntensity = 'pronounced', showInli
             )}
           </div>
 
-          <DecisionDock counts={counts} decision={decision} decide={decide} undo={undo} canUndo={history.length > 0} showInlineKbd={showInlineKbd} />
+          <DecisionDock counts={counts} decision={decision} decide={decide} undo={undo} canUndo={historyLen > 0} showInlineKbd={showInlineKbd} />
 
           <div className="meta ta-c" style={{ color: 'var(--fg-3)' }}>
             {decided > 0
@@ -288,20 +335,33 @@ export default function CullingView({ feedbackIntensity = 'pronounced', showInli
               <div>
                 <div className="meta">Quality</div>
                 <div className="fs-xl" style={{ fontWeight: 600, marginTop: 2, fontFamily: 'var(--font-mono)', letterSpacing: 'var(--tracking-tight)' }}>
-                  {Math.round(overall * 100)}<span className="dim" style={{ fontSize: 14 }}>/100</span>
+                  {overall != null
+                    ? <>{Math.round(overall * 100)}<span className="dim" style={{ fontSize: 14 }}>/100</span></>
+                    : <span className="dim" style={{ fontSize: 14 }}>—</span>}
                 </div>
               </div>
-              <span className="dbadge" style={{ color: overall >= .75 ? 'var(--keep)' : overall >= .5 ? 'var(--warning)' : 'var(--reject)' }}>
-                <span className="glyph" />
-                {overall >= .75 ? 'Strong' : overall >= .5 ? 'Mixed' : 'Weak'}
-              </span>
+              {overall != null ? (
+                <span className="dbadge" style={{ color: overall >= .75 ? 'var(--keep)' : overall >= .5 ? 'var(--warning)' : 'var(--reject)' }}>
+                  <span className="glyph" />
+                  {overall >= .75 ? 'Strong' : overall >= .5 ? 'Mixed' : 'Weak'}
+                </span>
+              ) : (
+                <span className="dbadge" style={{ color: 'var(--fg-3)' }}>
+                  <span className="glyph" />Unscored
+                </span>
+              )}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
-              <ScoreBar value={photo.sharp} label="Sharpness" />
-              <ScoreBar value={photo.expo}  label="Exposure" />
-              <ScoreBar value={photo.noise} label="Noise" />
-              <ScoreBar value={photo.comp}  label="Composition" />
+              <ScoreBar value={sharp ?? 0}  label="Sharpness"   />
+              <ScoreBar value={expo  ?? 0}  label="Exposure"    />
+              <ScoreBar value={noise ?? 0}  label="Noise"       />
+              <ScoreBar value={comp  ?? 0}  label="Composition" />
             </div>
+            {overall == null && (
+              <div className="fs-xxs dim mono upper" style={{ marginTop: 'var(--sp-3)', paddingTop: 'var(--sp-3)', borderTop: '1px dashed var(--line)' }}>
+                {photo.isRaw ? 'RAW — not scoreable' : 'Awaiting backend score'}
+              </div>
+            )}
           </div>
 
           <div className="card" style={{ padding: 'var(--sp-5)' }}>
@@ -324,7 +384,7 @@ export default function CullingView({ feedbackIntensity = 'pronounced', showInli
             </div>
           </div>
 
-          {decided === total && (
+          {decided === total && total > 0 && (
             <button className="btn btn-primary btn-uppercase" onClick={onComplete} style={{ height: 48 }}>
               <span>Review export</span>
               <Icon name="arrowR" size={14} />
