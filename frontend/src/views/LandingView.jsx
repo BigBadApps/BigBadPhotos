@@ -19,7 +19,7 @@ function FolderRow({ kind, label, value, onPick, accent }) {
         width: '100%', padding: 'var(--sp-4) var(--sp-5)',
         background: value ? 'var(--bg-3)' : 'var(--bg-2)',
         border: `1px solid ${accent ? 'color-mix(in oklab, var(--accent) 40%, var(--line))' : 'var(--line)'}`,
-        borderRadius: 12, textAlign: 'left', cursor: 'pointer',
+        borderRadius: 12, textAlign: 'left', cursor: onPick ? 'pointer' : 'default',
         transition: 'all .2s var(--ease-out)',
       }}
     >
@@ -40,7 +40,7 @@ function FolderRow({ kind, label, value, onPick, accent }) {
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>{value || label}</div>
       </div>
-      <Icon name="arrowR" size={16} />
+      {onPick && <Icon name="arrowR" size={16} />}
     </button>
   );
 }
