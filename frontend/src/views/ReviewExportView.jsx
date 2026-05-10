@@ -66,6 +66,8 @@ export default function ReviewExportView() {
   const photos = useStore(state => state.photos)
   const destDir = useStore(state => state.destDir)
   const setDestDir = useStore(state => state.setDestDir)
+  const isScoring = useStore(state => state.isScoring)
+  const scoringProgress = useStore(state => state.scoringProgress)
 
   const [includeMaybes, setIncludeMaybes] = useState(false)
   const [fileFormat, setFileFormat] = useState('original')
@@ -151,6 +153,39 @@ export default function ReviewExportView() {
           }}>
             <Icon name="info" size={20} style={{ color: 'var(--reject)', flexShrink: 0 }} />
             <p className="fs-sm" style={{ color: 'var(--reject)' }}>{exportError}</p>
+          </div>
+        )}
+
+        {/* AI scoring progress */}
+        {isScoring && (
+          <div style={{
+            marginBottom: 'var(--sp-5)',
+            background: 'color-mix(in oklab, var(--accent) 8%, transparent)',
+            border: '1px solid color-mix(in oklab, var(--accent) 25%, transparent)',
+            borderRadius: 10, padding: 'var(--sp-4)',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <span className="meta" style={{ color: 'var(--accent)' }}>
+                <Icon name="sparkle" size={12} style={{ display: 'inline', marginRight: 6, verticalAlign: 'middle' }} />
+                AI Scoring in progress…
+              </span>
+              <span className="mono fs-xs" style={{ color: 'var(--accent)' }}>
+                {scoringProgress.done} / {scoringProgress.total}
+              </span>
+            </div>
+            <div style={{ height: 4, background: 'var(--bg-4)', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%',
+                width: `${scoringProgress.total > 0 ? Math.round((scoringProgress.done / scoringProgress.total) * 100) : 0}%`,
+                background: 'var(--accent)',
+                boxShadow: '0 0 10px var(--accent)',
+                borderRadius: 2,
+                transition: 'width .5s var(--ease-out)',
+              }} />
+            </div>
+            <p className="fs-xxs dim mono upper" style={{ marginTop: 6 }}>
+              Scores will appear on thumbnails as photos are analyzed
+            </p>
           </div>
         )}
 
