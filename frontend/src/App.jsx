@@ -120,7 +120,7 @@ function AppContent() {
 
   const landingState = {
     source:          sourceDir?.name || '',
-    exportTarget:    destDir?.name   || '',
+    exportTarget:    HAS_DIR_PICKER ? (destDir?.name || '') : (destDir?.name || 'Downloads'),
     total:           totalCount || order.length,
     fileType,
     scored:          scoredCount,
@@ -168,7 +168,7 @@ function AppContent() {
             <LandingView
               state={landingState}
               onSelectSource={pickSource}
-              onSelectExport={pickExport}
+              onSelectExport={HAS_DIR_PICKER ? pickExport : undefined}
               onBegin={() => navigate('/cull')}
             />
           } />
