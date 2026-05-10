@@ -72,5 +72,10 @@ export function usePhotoRanker(loadingComplete) {
     return () => { cancelled = true }
   }, [loadingComplete]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { scoring, scoredCount, scoreError, backendAvailable, scoreableCount: order.length }
+  const scoreableCount = order.filter(id => {
+    const p = photos[id]
+    return p && !p.isRaw
+  }).length
+
+  return { scoring, scoredCount, scoreError, backendAvailable, scoreableCount }
 }
