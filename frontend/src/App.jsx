@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useStore } from './store';
 import GoogleGate from './components/GoogleGate';
@@ -24,6 +24,9 @@ function AppContent() {
   const setSourceDir = useStore(state => state.setSourceDir);
   const setDestDir   = useStore(state => state.setDestDir);
   const clearPhotos  = useStore(state => state.clearPhotos);
+  const addPhotos    = useStore(state => state.addPhotos);
+  const setCurrentId = useStore(state => state.setCurrentId);
+  const fileInputRef = useRef(null);
   const photos       = useStore(state => state.photos);
   const order        = useStore(state => state.order);
 
@@ -46,8 +49,45 @@ function AppContent() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  const WEB_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp']);
+  const IMG_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'raw', 'arw', 'cr2', 'cr3', 'nef', 'dng', 'orf', 'rw2', 'raf', 'tif', 'tiff']);
+
+  const handleFileInput = useCallback((e) => {
+    const files = Array.from(e.target.files)
+      .filter(f => IMG_EXTS.has(f.name.split('.').pop().toLowerCase()))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    e.target.value = '';
+    if (!files.length) return;
+    clearPhotos();
+    const photos = files.map(f => {
+      const ext = f.name.split('.').pop().toLowerCase();
+      const isWeb = WEB_EXTS.has(ext);
+      return {
+        id: f.name, filename: f.name,
+        url: isWeb ? URL.createObjectURL(f) : null,
+        file: f, fileHandle: null,
+        isRaw: !isWeb, decision: null, rank: null, sharpness: null,
+      };
+    });
+    addPhotos(photos);
+    if (photos[0]) setCurrentId(photos[0].id);
+    const folder = files[0].webkitRelativePath?.split('/')[0] || `${files.length} photos`;
+    setSourceDir({ name: folder, _ios: true });
+  }, [clearPhotos, addPhotos, setCurrentId, setSourceDir]);
+
+  // On iOS, auto-set a pseudo destDir so "Begin Review" can be unlocked.
+  // Export uses Web Share / sequential downloads instead of a real folder.
+  useEffect(() => {
+    if (!HAS_DIR_PICKER && !destDir) {
+      setDestDir({ name: 'Download to device', _ios: true });
+    }
+  }, []);
+
   const pickSource = useCallback(async () => {
-    if (!HAS_DIR_PICKER) return;
+    if (!HAS_DIR_PICKER) {
+      fileInputRef.current?.click();
+      return;
+    }
     try {
       const dir = await window.showDirectoryPicker({ mode: 'read' });
       clearPhotos();
@@ -58,7 +98,7 @@ function AppContent() {
   }, [setSourceDir, clearPhotos]);
 
   const pickExport = useCallback(async () => {
-    if (!HAS_DIR_PICKER) return;
+    if (!HAS_DIR_PICKER) return; // iOS exports via download/share — no folder needed
     try {
       const dir = await window.showDirectoryPicker({ mode: 'readwrite' });
       setDestDir(dir);
@@ -96,6 +136,14 @@ function AppContent() {
 
   return (
     <div className="app-root">
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept="image/*,.raw,.arw,.cr2,.cr3,.nef,.dng,.orf,.rw2,.raf,.tif,.tiff"
+        style={{ display: 'none' }}
+        onChange={handleFileInput}
+      />
       <AppBar
         view={currentView}
         step={stepMap[currentView]}
