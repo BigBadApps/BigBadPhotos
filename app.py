@@ -9,6 +9,12 @@ import secrets
 from datetime import timedelta
 from typing import Dict, List, Tuple
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 app = Flask(__name__)
 
 FRONTEND_DIST = os.path.join(os.path.dirname(__file__), 'frontend', 'dist')
