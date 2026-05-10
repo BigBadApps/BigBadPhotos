@@ -9,6 +9,8 @@ export function usePhotoRanker(loadingComplete) {
   const order = useStore(state => state.order)
   const sourceDir = useStore(state => state.sourceDir)
   const batchUpdateScores = useStore(state => state.batchUpdateScores)
+  const setIsScoring = useStore(state => state.setIsScoring)
+  const setScoringProgress = useStore(state => state.setScoringProgress)
 
   const [scoring, setScoring] = useState(false)
   const [scoredCount, setScoredCount] = useState(0)
@@ -41,8 +43,10 @@ export function usePhotoRanker(loadingComplete) {
 
     async function score() {
       setScoring(true)
+      setIsScoring(true)
       setScoreError(null)
       setScoredCount(0)
+      setScoringProgress(0, scoreable.length)
 
       try {
         for (let i = 0; i < scoreable.length; i += RANK_BATCH_SIZE) {
@@ -54,7 +58,9 @@ export function usePhotoRanker(loadingComplete) {
           if (cancelled) break
 
           batchUpdateScores(results)
-          setScoredCount(i + batch.length)
+          const done = i + batch.length
+          setScoredCount(done)
+          setScoringProgress(done, scoreable.length)
         }
       } catch (err) {
         if (!cancelled) {
@@ -63,7 +69,11 @@ export function usePhotoRanker(loadingComplete) {
           setBackendAvailable(false)
         }
       } finally {
-        if (!cancelled) setScoring(false)
+        if (!cancelled) {
+          setScoring(false)
+          setIsScoring(false)
+          setScoringProgress(scoreable.length, scoreable.length)
+        }
       }
     }
 
