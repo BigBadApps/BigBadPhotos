@@ -1,4 +1,15 @@
+import { useEffect, useState } from 'react';
 import Icon from '../components/Icon';
+import { useStore } from '../store';
+
+function formatEta(seconds) {
+  if (seconds == null || !Number.isFinite(seconds)) return null;
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `~${s}s remaining`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r > 0 ? `~${m}m ${r}s remaining` : `~${m}m remaining`;
+}
 
 function Stat({ label, value, sub }) {
   return (
@@ -45,20 +56,56 @@ function FolderRow({ kind, label, value, onPick, accent }) {
   );
 }
 
-export default function LandingView({ state, onSelectSource, onSelectExport, onBegin }) {
+export default function LandingView({
+  state,
+  onSelectSource,
+  onSelectExport,
+  onBeginScoring,
+  onBegin,
+  reviewReady = false,
+}) {
   const {
     source = '', exportTarget = '', total = 0, fileType = '—',
     scored = 0, scoreableCount = 0, isLoading = false,
     loadingComplete = false, loadedCount = 0, loadError = null,
     scoring = false, scoreError = null, backendAvailable = true,
     authExpired = false, hasPhotos = false,
+    etaSeconds = null, scoringStarted = false, scoringComplete = true,
   } = state || {};
 
-  const ready = !!source && !!exportTarget && loadingComplete && hasPhotos;
   const scoringPct = scoreableCount > 0
     ? Math.round((scored / scoreableCount) * 100)
     : 0;
   const loadPct = total > 0 ? Math.round((loadedCount / total) * 100) : 0;
+  const etaLabel = formatEta(etaSeconds);
+  const showBeginAiScoring =
+    !!source
+    && loadingComplete
+    && !isLoading
+    && hasPhotos
+    && scoreableCount > 0
+    && !scoring
+    && !(scoringPct === 100 && scoringStarted);
+
+  const order = useStore((s) => s.order);
+  const photos = useStore((s) => s.photos);
+  const [heroPhotoId, setHeroPhotoId] = useState(null);
+
+  useEffect(() => {
+    setHeroPhotoId(null);
+  }, [source]);
+
+  useEffect(() => {
+    if (!source) return;
+    const ids = order.filter((id) => photos[id]?.url);
+    if (ids.length === 0) return;
+    setHeroPhotoId((prev) => {
+      if (prev && ids.includes(prev)) return prev;
+      return ids[Math.floor(Math.random() * ids.length)];
+    });
+  }, [source, order, photos]);
+
+  const heroUrl = heroPhotoId ? photos[heroPhotoId]?.url : null;
 
   return (
     <div className="view">
@@ -77,14 +124,47 @@ export default function LandingView({ state, onSelectSource, onSelectExport, onB
           minHeight: 480, display: 'flex', flexDirection: 'column',
         }}>
           <div style={{
-            width: '100%', flex: 1,
+            position: 'relative',
+            width: '100%', flex: 1, minHeight: 0,
             background: 'repeating-linear-gradient(135deg, rgba(255,255,255,.025) 0 2px, transparent 2px 14px), var(--bg-3)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, color: 'var(--fg-3)' }}>
-              <Icon name="image" size={40} stroke={1.2} />
-              <span className="meta">Select a source folder to get started</span>
-            </div>
+            {heroUrl ? (
+              <>
+                <img
+                  src={heroUrl}
+                  alt=""
+                  decoding="async"
+                  draggable={false}
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'cover',
+                  }}
+                />
+                <div
+                  aria-hidden
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    background: 'linear-gradient(to top, rgba(0,0,0,.55) 0%, transparent 45%), repeating-linear-gradient(135deg, rgba(255,255,255,.02) 0 2px, transparent 2px 14px)',
+                    pointerEvents: 'none',
+                  }}
+                />
+              </>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, color: 'var(--fg-3)' }}>
+                <Icon name="image" size={40} stroke={1.2} />
+                <span className="meta">
+                  {!source && 'Select a source folder to get started'}
+                  {source && isLoading && 'Loading preview…'}
+                  {source && !isLoading && loadingComplete && !heroUrl
+                    && 'No browser preview (RAW-only or unsupported formats)'}
+                </span>
+              </div>
+            )}
           </div>
 
           <div style={{
@@ -105,7 +185,17 @@ export default function LandingView({ state, onSelectSource, onSelectExport, onB
               </h1>
               <p style={{ margin: '12px 0 0', color: 'var(--fg-2)', fontSize: 'var(--fs-md)', maxWidth: '40ch' }}>
                 {source && loadingComplete
-                  ? `${total.toLocaleString()} photos loaded${scoreableCount > 0 ? (scoring ? ' · scoring in progress' : scoringPct === 100 ? ' · scoring complete' : '') : ' · RAW files'}.`
+                  ? `${total.toLocaleString()} photos loaded${
+                    scoreableCount > 0
+                      ? (scoring
+                        ? ' · AI scoring in progress'
+                        : scoringPct === 100 && scoringStarted
+                          ? ' · AI scoring complete'
+                          : scoringStarted
+                            ? ''
+                            : ' · run AI scoring when ready')
+                      : ' · RAW files'
+                  }.`
                   : source && isLoading
                   ? `Loading photos from ${source}…`
                   : 'Pick a source folder, set an export target, and step into the darkroom.'}
@@ -187,14 +277,19 @@ export default function LandingView({ state, onSelectSource, onSelectExport, onB
                 </div>
               )}
 
-              {/* AI scoring progress */}
-              {!isLoading && loadingComplete && scoreableCount > 0 && (
+              {/* AI scoring (only after user starts scoring, or finished / errored a run) */}
+              {!isLoading && loadingComplete && scoreableCount > 0 && scoringStarted && (
                 <div style={{ paddingTop: 'var(--sp-3)', borderTop: '1px dashed var(--line)' }}>
                   <div className="flex jcsb aic" style={{ marginBottom: 8 }}>
                     <span className="meta">AI Scoring</span>
-                    <span className="mono fs-xs" style={{ color: scoringPct === 100 ? 'var(--keep)' : scoring ? 'var(--accent)' : 'var(--fg-2)' }}>
-                      {scoringPct}%
-                    </span>
+                    <div className="flex aic" style={{ gap: 8 }}>
+                      {scoring && etaLabel && (
+                        <span className="mono fs-xxs" style={{ color: 'var(--fg-3)' }}>{etaLabel}</span>
+                      )}
+                      <span className="mono fs-xs" style={{ color: scoringPct === 100 ? 'var(--keep)' : scoring ? 'var(--accent)' : 'var(--fg-2)' }}>
+                        {scoringPct}%
+                      </span>
+                    </div>
                   </div>
                   <div style={{ height: 6, background: 'var(--bg-4)', borderRadius: 3, overflow: 'hidden' }}>
                     <div style={{
@@ -206,7 +301,7 @@ export default function LandingView({ state, onSelectSource, onSelectExport, onB
                   </div>
                   <div className="fs-xxs dim mono upper" style={{ marginTop: 6 }}>
                     {scoringPct === 100
-                      ? `All ${scored} photos scored · ready`
+                      ? `All ${scored} photos scored · ready for review`
                       : scoring
                       ? `${scored} of ${scoreableCount} · scoring…`
                       : authExpired
@@ -239,12 +334,25 @@ export default function LandingView({ state, onSelectSource, onSelectExport, onB
             </div>
           )}
 
-          {/* Begin button */}
+          {/* Begin AI scoring — after load, before / during first scoring run */}
+          {showBeginAiScoring && onBeginScoring && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-uppercase"
+              onClick={onBeginScoring}
+              style={{ height: 56, fontSize: 'var(--fs-sm)' }}
+            >
+              <span>Begin AI Scoring</span>
+              <Icon name="arrowR" size={16} />
+            </button>
+          )}
+
+          {/* Begin review — only when export is set and scoring is done (or RAW-only) */}
           <button
             className="btn btn-primary btn-uppercase"
             onClick={onBegin}
-            disabled={!ready}
-            style={{ height: 56, fontSize: 'var(--fs-sm)' }}
+            disabled={!reviewReady}
+            style={{ height: 56, fontSize: 'var(--fs-sm)', opacity: reviewReady ? 1 : 0.55 }}
           >
             <span>Begin Review</span>
             <Icon name="arrowR" size={16} />
@@ -261,6 +369,11 @@ export default function LandingView({ state, onSelectSource, onSelectExport, onB
           )}
           {source && exportTarget && loadingComplete && !hasPhotos && (
             <div className="fs-xxs dim mono upper ta-c">No photos found in folder</div>
+          )}
+          {source && exportTarget && loadingComplete && hasPhotos && scoreableCount > 0 && !scoringComplete && (
+            <div className="fs-xxs dim mono upper ta-c">
+              {scoringStarted ? 'Finish AI scoring to begin review' : 'Start AI scoring to rank photos before review'}
+            </div>
           )}
         </div>
       </div>

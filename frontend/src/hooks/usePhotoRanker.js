@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { rankPhotos } from '../api/client'
 
@@ -8,9 +8,6 @@ export function usePhotoRanker(loadingComplete) {
   const photos = useStore(state => state.photos)
   const order = useStore(state => state.order)
   const sourceDir = useStore(state => state.sourceDir)
-  const batchUpdateScores = useStore(state => state.batchUpdateScores)
-  const setIsScoring = useStore(state => state.setIsScoring)
-  const setScoringProgress = useStore(state => state.setScoringProgress)
   const setAuthSessionExpired = useStore(state => state.setAuthSessionExpired)
 
   const [scoring, setScoring] = useState(false)
@@ -18,39 +15,54 @@ export function usePhotoRanker(loadingComplete) {
   const [scoreError, setScoreError] = useState(null)
   const [backendAvailable, setBackendAvailable] = useState(true)
   const [authExpired, setAuthExpired] = useState(false)
+  /** Incremented when the user clicks “Begin AI scoring”; reset on new folder */
+  const [scoringRunId, setScoringRunId] = useState(0)
+  const [etaSeconds, setEtaSeconds] = useState(null)
+  const scoringStartedAt = useRef(null)
 
-  const ranRef = useRef(false)
-
-  // Reset when the user picks a new source folder so scoring re-runs
+  // Reset when the user picks a new source folder
   useEffect(() => {
-    ranRef.current = false
+    setScoringRunId(0)
     setScoredCount(0)
     setScoreError(null)
     setBackendAvailable(true)
     setAuthExpired(false)
     setAuthSessionExpired(false)
+    setEtaSeconds(null)
+    scoringStartedAt.current = null
   }, [sourceDir, setAuthSessionExpired])
 
-  useEffect(() => {
-    // Only run once after the loader reports it's done
-    if (!loadingComplete || ranRef.current || order.length === 0) return
-    ranRef.current = true
+  const beginScoring = useCallback(() => {
+    if (!loadingComplete) return
+    setScoreError(null)
+    setBackendAvailable(true)
+    setAuthExpired(false)
+    setAuthSessionExpired(false)
+    setScoringRunId((n) => n + 1)
+  }, [loadingComplete, setAuthSessionExpired])
 
-    // Only score web-renderable photos — backend can't decode RAW
-    const scoreable = order
-      .map(id => photos[id])
-      .filter(p => p && !p.isRaw && p.file)
+  useEffect(() => {
+    if (scoringRunId === 0 || !loadingComplete) return
+
+    const { order: o, photos: ph } = useStore.getState()
+    const scoreable = o
+      .map((id) => ph[id])
+      .filter((p) => p && !p.isRaw && p.file)
 
     if (scoreable.length === 0) return
 
     let cancelled = false
+    const { setIsScoring: setBusy, setScoringProgress: setProg, setAuthSessionExpired: setExpired } =
+      useStore.getState()
 
     async function score() {
       setScoring(true)
-      setIsScoring(true)
+      setBusy(true)
       setScoreError(null)
       setScoredCount(0)
-      setScoringProgress(0, scoreable.length)
+      setProg(0, scoreable.length)
+      setEtaSeconds(null)
+      scoringStartedAt.current = Date.now()
 
       try {
         for (let i = 0; i < scoreable.length; i += RANK_BATCH_SIZE) {
@@ -61,17 +73,27 @@ export function usePhotoRanker(loadingComplete) {
 
           if (cancelled) break
 
-          batchUpdateScores(results)
+          useStore.getState().batchUpdateScores(results)
           const done = i + batch.length
           setScoredCount(done)
-          setScoringProgress(done, scoreable.length)
+          useStore.getState().setScoringProgress(done, scoreable.length)
+
+          const started = scoringStartedAt.current
+          if (started && done < scoreable.length && done > 0) {
+            const elapsedSec = (Date.now() - started) / 1000
+            const rate = done / elapsedSec
+            const remaining = Math.round((scoreable.length - done) / rate)
+            setEtaSeconds(Number.isFinite(remaining) ? Math.max(0, remaining) : null)
+          } else {
+            setEtaSeconds(null)
+          }
         }
       } catch (err) {
         if (!cancelled) {
           setScoreError(err.message)
           if (err.status === 401) {
             setAuthExpired(true)
-            setAuthSessionExpired(true)
+            setExpired(true)
             setBackendAvailable(true)
           } else {
             setBackendAvailable(false)
@@ -79,19 +101,33 @@ export function usePhotoRanker(loadingComplete) {
         }
       } finally {
         setScoring(false)
-        setIsScoring(false)
+        useStore.getState().setIsScoring(false)
+        setEtaSeconds(null)
+        scoringStartedAt.current = null
       }
     }
 
     score()
 
-    return () => { cancelled = true }
-  }, [loadingComplete]) // eslint-disable-line react-hooks/exhaustive-deps
+    return () => {
+      cancelled = true
+    }
+  }, [scoringRunId, loadingComplete])
 
-  const scoreableCount = order.filter(id => {
+  const scoreableCount = order.filter((id) => {
     const p = photos[id]
     return p && !p.isRaw
   }).length
 
-  return { scoring, scoredCount, scoreError, backendAvailable, scoreableCount, authExpired }
+  return {
+    scoring,
+    scoredCount,
+    scoreError,
+    backendAvailable,
+    scoreableCount,
+    authExpired,
+    beginScoring,
+    etaSeconds,
+    scoringStarted: scoringRunId > 0,
+  }
 }
