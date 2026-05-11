@@ -15,8 +15,13 @@ export async function rankPhotos(photos) {
   const res = await fetch('/rank', { method: 'POST', body: formData })
   if (!res.ok) {
     let detail = `HTTP ${res.status}`
-    try { detail = (await res.json()).detail || detail } catch {}
-    throw new Error(detail)
+    try {
+      const body = await res.json()
+      detail = body.detail || body.error || detail
+    } catch {}
+    const err = new Error(detail)
+    err.status = res.status
+    throw err
   }
   return (await res.json()).results
 }

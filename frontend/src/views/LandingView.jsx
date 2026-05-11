@@ -51,7 +51,7 @@ export default function LandingView({ state, onSelectSource, onSelectExport, onB
     scored = 0, scoreableCount = 0, isLoading = false,
     loadingComplete = false, loadedCount = 0, loadError = null,
     scoring = false, scoreError = null, backendAvailable = true,
-    hasPhotos = false,
+    authExpired = false, hasPhotos = false,
   } = state || {};
 
   const ready = !!source && !!exportTarget && loadingComplete && hasPhotos;
@@ -209,6 +209,18 @@ export default function LandingView({ state, onSelectSource, onSelectExport, onB
                       ? `All ${scored} photos scored · ready`
                       : scoring
                       ? `${scored} of ${scoreableCount} · scoring…`
+                      : authExpired
+                      ? (
+                        <span>
+                          Session expired &middot;{' '}
+                          <span
+                            style={{ color: 'var(--accent)', cursor: 'pointer', textDecoration: 'underline' }}
+                            onClick={() => window.location.reload()}
+                          >
+                            reload to sign in
+                          </span>
+                        </span>
+                      )
                       : scoreError
                       ? `Scoring error · ${backendAvailable ? scoreError : 'backend unavailable'}`
                       : !backendAvailable
