@@ -16,6 +16,7 @@ export function usePhotoRanker(loadingComplete) {
   const [scoredCount, setScoredCount] = useState(0)
   const [scoreError, setScoreError] = useState(null)
   const [backendAvailable, setBackendAvailable] = useState(true)
+  const [authExpired, setAuthExpired] = useState(false)
 
   const ranRef = useRef(false)
 
@@ -25,6 +26,7 @@ export function usePhotoRanker(loadingComplete) {
     setScoredCount(0)
     setScoreError(null)
     setBackendAvailable(true)
+    setAuthExpired(false)
   }, [sourceDir])
 
   useEffect(() => {
@@ -64,15 +66,19 @@ export function usePhotoRanker(loadingComplete) {
         }
       } catch (err) {
         if (!cancelled) {
-          // Backend may not be running — fail silently, just mark unavailable
           setScoreError(err.message)
-          setBackendAvailable(false)
+          if (err.status === 401) {
+            // Session expired — backend is up but auth needs to be renewed
+            setAuthExpired(true)
+          } else {
+            setBackendAvailable(false)
+          }
         }
       } finally {
         if (!cancelled) {
           setScoring(false)
           setIsScoring(false)
-          setScoringProgress(scoreable.length, scoreable.length)
+          // Don't reset progress to 100% on error; the loop already set correct progress
         }
       }
     }
@@ -87,5 +93,5 @@ export function usePhotoRanker(loadingComplete) {
     return p && !p.isRaw
   }).length
 
-  return { scoring, scoredCount, scoreError, backendAvailable, scoreableCount }
+  return { scoring, scoredCount, scoreError, backendAvailable, scoreableCount, authExpired }
 }

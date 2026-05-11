@@ -32,7 +32,7 @@ function AppContent() {
   const order        = useStore(state => state.order);
 
   const { loading: photoLoading, loadingComplete, loadedCount, totalCount, loadError } = usePhotoLoader();
-  const { scoring, scoredCount, scoreError, backendAvailable, scoreableCount } = usePhotoRanker(loadingComplete);
+  const { scoring, scoredCount, scoreError, backendAvailable, scoreableCount, authExpired } = usePhotoRanker(loadingComplete);
   useSessionPersistence(loadingComplete);
 
   const currentView = location.pathname === '/'        ? 'landing'
@@ -132,6 +132,7 @@ function AppContent() {
     scoring,
     scoreError,
     backendAvailable,
+    authExpired,
     hasPhotos:       order.length > 0,
   };
 
