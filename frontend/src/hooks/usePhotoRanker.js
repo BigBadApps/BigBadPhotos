@@ -7,17 +7,29 @@ const RANK_BATCH_SIZE = 100 // stay under backend's 200 limit with headroom
 export function usePhotoRanker(loadingComplete) {
   const photos = useStore(state => state.photos)
   const order = useStore(state => state.order)
+  const sourceDir = useStore(state => state.sourceDir)
   const batchUpdateScores = useStore(state => state.batchUpdateScores)
-  const setScoringProgress = useStore(state => state.setScoringProgress)
   const setIsScoring = useStore(state => state.setIsScoring)
+  const setScoringProgress = useStore(state => state.setScoringProgress)
   const setAuthSessionExpired = useStore(state => state.setAuthSessionExpired)
 
   const [scoring, setScoring] = useState(false)
   const [scoredCount, setScoredCount] = useState(0)
   const [scoreError, setScoreError] = useState(null)
   const [backendAvailable, setBackendAvailable] = useState(true)
+  const [authExpired, setAuthExpired] = useState(false)
 
   const ranRef = useRef(false)
+
+  // Reset when the user picks a new source folder so scoring re-runs
+  useEffect(() => {
+    ranRef.current = false
+    setScoredCount(0)
+    setScoreError(null)
+    setBackendAvailable(true)
+    setAuthExpired(false)
+    setAuthSessionExpired(false)
+  }, [sourceDir, setAuthSessionExpired])
 
   useEffect(() => {
     // Only run once after the loader reports it's done
@@ -35,9 +47,9 @@ export function usePhotoRanker(loadingComplete) {
 
     async function score() {
       setScoring(true)
+      setIsScoring(true)
       setScoreError(null)
       setScoredCount(0)
-      setIsScoring(true)
       setScoringProgress(0, scoreable.length)
 
       try {
@@ -58,6 +70,7 @@ export function usePhotoRanker(loadingComplete) {
         if (!cancelled) {
           setScoreError(err.message)
           if (err.status === 401) {
+            setAuthExpired(true)
             setAuthSessionExpired(true)
             setBackendAvailable(true)
           } else {
@@ -75,5 +88,10 @@ export function usePhotoRanker(loadingComplete) {
     return () => { cancelled = true }
   }, [loadingComplete]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { scoring, scoredCount, scoreError, backendAvailable, scoreableCount: order.length }
+  const scoreableCount = order.filter(id => {
+    const p = photos[id]
+    return p && !p.isRaw
+  }).length
+
+  return { scoring, scoredCount, scoreError, backendAvailable, scoreableCount, authExpired }
 }
