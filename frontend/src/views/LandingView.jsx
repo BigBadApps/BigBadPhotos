@@ -57,7 +57,7 @@ export default function LandingView({ state, onSelectSource, onSelectExport, onB
   const ready = !!source && !!exportTarget && loadingComplete && hasPhotos;
   const scoringPct = scoreableCount > 0
     ? Math.round((scored / scoreableCount) * 100)
-    : (loadingComplete && hasPhotos ? 100 : 0);
+    : 0;
   const loadPct = total > 0 ? Math.round((loadedCount / total) * 100) : 0;
 
   return (

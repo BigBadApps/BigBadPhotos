@@ -163,6 +163,26 @@ function AppContent() {
         onHelp={() => setHelp(true)}
         projectName={sourceDir?.name || null}
       />
+      {authExpired && (
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="mono fs-xxs upper"
+          style={{
+            width: '100%',
+            flexShrink: 0,
+            padding: '10px 16px',
+            border: 'none',
+            borderBottom: '1px solid color-mix(in oklab, var(--reject) 35%, var(--line))',
+            background: 'color-mix(in oklab, var(--reject) 18%, var(--bg-2))',
+            color: 'var(--reject)',
+            cursor: 'pointer',
+            letterSpacing: '0.08em',
+          }}
+        >
+          Session expired · reload to sign in
+        </button>
+      )}
       <div style={{ flex: 1, position: 'relative', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <Routes>
           <Route path="/" element={

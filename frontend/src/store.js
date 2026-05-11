@@ -10,6 +10,7 @@ export const useStore = create((set, get) => ({
   history: [],
   currentRoute: '/',
   isScoring: false,
+  authSessionExpired: false,
   exportProgress: { done: 0, total: 0 },
   setSourceDir: (dir) => set({ sourceDir: dir }),
   clearPhotos: () => set({
@@ -89,6 +90,7 @@ export const useStore = create((set, get) => ({
   },
   setScoringProgress: (done, total) => set({ scoringProgress: { done, total } }),
   setIsScoring: (scoring) => set({ isScoring: scoring }),
+  setAuthSessionExpired: (expired) => set({ authSessionExpired: !!expired }),
   setExportProgress: (done, total) => set({ exportProgress: { done, total } }),
   getKeepCount: () => Object.values(get().photos).filter(p => p.decision === 'keep').length,
   getMaybeCount: () => Object.values(get().photos).filter(p => p.decision === 'maybe').length,

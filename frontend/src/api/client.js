@@ -17,7 +17,7 @@ export async function rankPhotos(photos) {
     let detail = `HTTP ${res.status}`
     try {
       const body = await res.json()
-      detail = body.detail || body.error || detail
+      detail = body.error || body.detail || detail
     } catch {}
     const err = new Error(detail)
     err.status = res.status

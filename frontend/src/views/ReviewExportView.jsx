@@ -386,7 +386,7 @@ export default function ReviewExportView() {
             exportDone={exportDone}
             exportedCount={exportedCount}
             exportTotal={exportTotal}
-            hasDestDir={HAS_DIR_PICKER ? hasDestDir : true}
+            hasDestDir={hasDestDir}
           />
           {!hasDestDir && !exporting && !exportDone && (
             <p className="fs-xxs dim mono upper ta-c" style={{ marginTop: 8 }}>Select a destination first</p>

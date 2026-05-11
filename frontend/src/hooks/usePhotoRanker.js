@@ -11,6 +11,7 @@ export function usePhotoRanker(loadingComplete) {
   const batchUpdateScores = useStore(state => state.batchUpdateScores)
   const setIsScoring = useStore(state => state.setIsScoring)
   const setScoringProgress = useStore(state => state.setScoringProgress)
+  const setAuthSessionExpired = useStore(state => state.setAuthSessionExpired)
 
   const [scoring, setScoring] = useState(false)
   const [scoredCount, setScoredCount] = useState(0)
@@ -27,7 +28,8 @@ export function usePhotoRanker(loadingComplete) {
     setScoreError(null)
     setBackendAvailable(true)
     setAuthExpired(false)
-  }, [sourceDir])
+    setAuthSessionExpired(false)
+  }, [sourceDir, setAuthSessionExpired])
 
   useEffect(() => {
     // Only run once after the loader reports it's done
@@ -68,18 +70,16 @@ export function usePhotoRanker(loadingComplete) {
         if (!cancelled) {
           setScoreError(err.message)
           if (err.status === 401) {
-            // Session expired — backend is up but auth needs to be renewed
             setAuthExpired(true)
+            setAuthSessionExpired(true)
+            setBackendAvailable(true)
           } else {
             setBackendAvailable(false)
           }
         }
       } finally {
-        if (!cancelled) {
-          setScoring(false)
-          setIsScoring(false)
-          // Don't reset progress to 100% on error; the loop already set correct progress
-        }
+        setScoring(false)
+        setIsScoring(false)
       }
     }
 

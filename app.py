@@ -20,6 +20,7 @@ app = Flask(__name__)
 
 FRONTEND_DIST = os.path.join(os.path.dirname(__file__), 'frontend', 'dist')
 
+# In production, set FLASK_SECRET_KEY (e.g. on Railway) so sessions survive deploys/restarts.
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', secrets.token_hex(32))
 IS_DEBUG = (os.environ.get('FLASK_DEBUG') == '1') or (os.environ.get('BBP_DEBUG') == '1')
 app.config.update(

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import Icon from './Icon';
+import { useStore } from '../store';
 
 function GoogleMark({ size = 20 }) {
   return (
@@ -42,6 +43,7 @@ function AuthGate({ onAuthed, authConfig }) {
       if (res.ok) {
         setState('success');
         setHint('Authenticated. Loading workspace…');
+        useStore.getState().setAuthSessionExpired(false);
         setTimeout(() => onAuthed(), 500);
       } else {
         setState('error');
@@ -60,6 +62,7 @@ function AuthGate({ onAuthed, authConfig }) {
   function tryDev() {
     setState('success');
     setHint('Dev mode — entering workspace…');
+    useStore.getState().setAuthSessionExpired(false);
     setTimeout(() => onAuthed(), 400);
   }
 
@@ -261,11 +264,22 @@ export default function GoogleGate({ children }) {
       fetch('/auth/config').then(r => r.ok ? r.json() : null).catch(() => null),
     ]).then(([meData, configData]) => {
       if (configData) setAuthConfig(configData);
-      if (meData?.authenticated || configData?.open) setAuthed(true);
+      if (meData?.authenticated || configData?.open) {
+        useStore.getState().setAuthSessionExpired(false);
+        setAuthed(true);
+      }
     }).finally(() => setChecking(false));
   }, []);
 
   if (checking) return <Splash />;
   if (authed) return children;
-  return <AuthGate onAuthed={() => setAuthed(true)} authConfig={authConfig} />;
+  return (
+    <AuthGate
+      onAuthed={() => {
+        useStore.getState().setAuthSessionExpired(false);
+        setAuthed(true);
+      }}
+      authConfig={authConfig}
+    />
+  );
 }
