@@ -32,7 +32,17 @@ function AppContent() {
   const order        = useStore(state => state.order);
 
   const { loading: photoLoading, loadingComplete, loadedCount, totalCount, loadError } = usePhotoLoader();
-  const { scoring, scoredCount, scoreError, backendAvailable, scoreableCount, authExpired } = usePhotoRanker(loadingComplete);
+  const {
+    scoring,
+    scoredCount,
+    scoreError,
+    backendAvailable,
+    scoreableCount,
+    authExpired,
+    beginScoring,
+    etaSeconds,
+    scoringStarted,
+  } = usePhotoRanker(loadingComplete);
   useSessionPersistence(loadingComplete);
 
   const currentView = location.pathname === '/'        ? 'landing'
@@ -118,6 +128,11 @@ function AppContent() {
     : webCount > 0 ? 'JPG / PNG'
     : '—';
 
+  const scoringPct =
+    scoreableCount > 0 ? Math.round((scoredCount / scoreableCount) * 100) : 0;
+  const scoringComplete =
+    scoreableCount === 0 || (scoringPct === 100 && !scoring);
+
   const landingState = {
     source:          sourceDir?.name || '',
     exportTarget:    HAS_DIR_PICKER ? (destDir?.name || '') : (destDir?.name || 'Downloads'),
@@ -134,9 +149,18 @@ function AppContent() {
     backendAvailable,
     authExpired,
     hasPhotos:       order.length > 0,
+    etaSeconds,
+    scoringStarted,
+    scoringComplete,
   };
 
   const hasPhotos = order.length > 0;
+  const reviewReady =
+    !!sourceDir &&
+    (!!destDir?.name || !HAS_DIR_PICKER) &&
+    loadingComplete &&
+    hasPhotos &&
+    scoringComplete;
 
   return (
     <div className="app-root">
@@ -190,7 +214,9 @@ function AppContent() {
               state={landingState}
               onSelectSource={pickSource}
               onSelectExport={HAS_DIR_PICKER ? pickExport : undefined}
+              onBeginScoring={beginScoring}
               onBegin={() => navigate('/cull')}
+              reviewReady={reviewReady}
             />
           } />
           <Route path="/cull"    element={hasPhotos ? <CullingView feedbackIntensity="pronounced" showInlineKbd onComplete={() => navigate('/review')} /> : <Navigate to="/" />} />

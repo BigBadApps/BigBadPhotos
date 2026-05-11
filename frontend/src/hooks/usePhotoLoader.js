@@ -27,8 +27,8 @@ export function usePhotoLoader() {
     objectUrls.current = []
     prevUrls.forEach(url => URL.revokeObjectURL(url))
 
-    // iOS path: photos were already loaded via <input type="file"> in LandingView.
-    // Just mark loading as complete so usePhotoRanker fires.
+    // iOS path: photos were already loaded via <input type="file"> in App.
+    // Mark loading complete so the landing flow can offer AI scoring.
     if (sourceDir?._ios) {
       setLoading(false)
       setLoadingComplete(true)
