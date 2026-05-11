@@ -62,6 +62,7 @@ export default function LandingView({
   onSelectExport,
   onBeginScoring,
   onBegin,
+  onLiveMode,
   reviewReady = false,
 }) {
   const {
@@ -232,9 +233,23 @@ export default function LandingView({
 
         {/* Controls column */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap)', minWidth: 0 }}>
+          
+          {/* Camera Bridge */}
+          <div className="card" style={{ padding: 'var(--sp-5)' }}>
+            <div className="meta" style={{ marginBottom: 'var(--sp-4)' }}>Live Field Review</div>
+            <button
+              onClick={onLiveMode}
+              className="btn btn-secondary btn-uppercase"
+              style={{ width: '100%', height: 48, fontSize: 'var(--fs-sm)' }}
+            >
+              <Icon name="aperture" size={16} />
+              <span>Connect Camera</span>
+            </button>
+          </div>
+
           {/* Folder pickers */}
           <div className="card" style={{ padding: 'var(--sp-5)' }}>
-            <div className="meta" style={{ marginBottom: 'var(--sp-4)' }}>Folders</div>
+            <div className="meta" style={{ marginBottom: 'var(--sp-4)' }}>Post-Session Review</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
               <FolderRow kind="Source" label="Select source folder" value={source} onPick={onSelectSource} accent={!source} />
               <FolderRow kind="Export Target" label="Where keepers go" value={exportTarget} onPick={onSelectExport} />

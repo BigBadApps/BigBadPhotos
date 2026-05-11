@@ -33,6 +33,7 @@ function AppContent() {
   const exportInputRef = useRef(null);
   const photos       = useStore(state => state.photos);
   const order        = useStore(state => state.order);
+  const bridgeEnabled = useStore(state => state.bridgeEnabled);
 
   const { loading: photoLoading, loadingComplete, loadedCount, totalCount, loadError } = usePhotoLoader();
   const {
@@ -160,6 +161,7 @@ function AppContent() {
   };
 
   const hasPhotos = order.length > 0;
+  const canCull = hasPhotos || bridgeEnabled;
   const reviewReady =
     !!sourceDir &&
     (!!destDir?.name || !HAS_DIR_PICKER) &&
@@ -222,10 +224,11 @@ function AppContent() {
               onSelectExport={HAS_DIR_PICKER ? pickExport : undefined}
               onBeginScoring={beginScoring}
               onBegin={() => navigate('/cull')}
+              onLiveMode={() => navigate('/cull')}
               reviewReady={reviewReady}
             />
           } />
-          <Route path="/cull"    element={hasPhotos ? <CullingView feedbackIntensity="pronounced" showInlineKbd onComplete={() => navigate('/review')} /> : <Navigate to="/" />} />
+          <Route path="/cull"    element={canCull ? <CullingView feedbackIntensity="pronounced" showInlineKbd onComplete={() => navigate('/review')} /> : <Navigate to="/" />} />
           <Route path="/compare" element={hasPhotos ? <CompareView /> : <Navigate to="/" />} />
           <Route path="/review"  element={hasPhotos ? <ReviewExportView /> : <Navigate to="/" />} />
           <Route path="/focus"   element={<FocusView />} />
