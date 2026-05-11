@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../store'
 import { createDisplayUrl } from '../utils/imageResize'
+import { runWithConcurrency } from '../utils/displayUrlQueue'
 
 const WEB_FORMATS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp'])
 const RAW_FORMATS = new Set(['raw', 'arw', 'cr2', 'cr3', 'nef', 'dng', 'orf', 'rw2', 'raf', 'tif', 'tiff'])
 
-const BATCH_SIZE = 10
+// Ingest only reads files from disk; display resizing runs in a separate queue.
+const INGEST_BATCH_SIZE = 40
+const DISPLAY_CONCURRENCY = 3
+const DISPLAY_URL_FLUSH_SIZE = 12
 
 export function usePhotoLoader() {
   const sourceDir = useStore(state => state.sourceDir)
@@ -22,13 +26,10 @@ export function usePhotoLoader() {
   const objectUrls = useRef([])
 
   useEffect(() => {
-    // Revoke URLs from the previous folder whenever sourceDir changes.
     const prevUrls = objectUrls.current
     objectUrls.current = []
     prevUrls.forEach(url => URL.revokeObjectURL(url))
 
-    // iOS path: photos were already loaded via <input type="file"> in App.
-    // Mark loading complete so the landing flow can offer AI scoring.
     if (sourceDir?._ios) {
       setLoading(false)
       setLoadingComplete(true)
@@ -50,8 +51,69 @@ export function usePhotoLoader() {
       setLoadedCount(0)
       setTotalCount(0)
 
+      const displayQueue = []
+      let ingestDone = false
+      const pendingUrlUpdates = []
+
+      const flushDisplayUrls = () => {
+        if (!pendingUrlUpdates.length) return
+        const batch = pendingUrlUpdates.splice(0, pendingUrlUpdates.length)
+        useStore.getState().batchSetPhotoDisplayUrls(batch)
+      }
+
+      const upgradeDisplayUrls = async () => {
+        const pendingUpdates = []
+
+        const flushPending = () => {
+          if (!pendingUpdates.length) return
+          pendingUrlUpdates.push(...pendingUpdates.splice(0, pendingUpdates.length))
+          if (pendingUrlUpdates.length >= DISPLAY_URL_FLUSH_SIZE) {
+            flushDisplayUrls()
+          }
+        }
+
+        const worker = async () => {
+          while (!cancelled) {
+            const job = displayQueue.shift()
+            if (!job) {
+              if (ingestDone) break
+              await new Promise((resolve) => setTimeout(resolve, 16))
+              continue
+            }
+
+            try {
+              const nextUrl = await createDisplayUrl(job.file)
+              if (cancelled) {
+                URL.revokeObjectURL(nextUrl)
+                break
+              }
+
+              URL.revokeObjectURL(job.previewUrl)
+              objectUrls.current = objectUrls.current.filter((url) => url !== job.previewUrl)
+              objectUrls.current.push(nextUrl)
+              pendingUpdates.push({ id: job.id, url: nextUrl })
+              if (pendingUpdates.length >= DISPLAY_URL_FLUSH_SIZE) {
+                flushPending()
+              }
+            } catch {
+              // Keep the lightweight preview URL when resize fails.
+            }
+          }
+        }
+
+        await runWithConcurrency(
+          Array.from({ length: DISPLAY_CONCURRENCY }, (_, i) => i),
+          DISPLAY_CONCURRENCY,
+          worker,
+        )
+
+        flushPending()
+        flushDisplayUrls()
+      }
+
+      const displayTask = upgradeDisplayUrls()
+
       try {
-        // Collect all matching file handles first (fast — just filenames)
         const handles = []
         for await (const entry of sourceDir.values()) {
           if (entry.kind !== 'file') continue
@@ -63,15 +125,13 @@ export function usePhotoLoader() {
 
         if (cancelled) return
 
-        // Sort alphabetically — matches camera file naming (DSC_0001, IMG_0002, etc.)
         handles.sort((a, b) => a.name.localeCompare(b.name))
         setTotalCount(handles.length)
 
-        // Load and add in batches so UI updates progressively
-        for (let i = 0; i < handles.length; i += BATCH_SIZE) {
+        for (let i = 0; i < handles.length; i += INGEST_BATCH_SIZE) {
           if (cancelled) break
 
-          const slice = handles.slice(i, i + BATCH_SIZE)
+          const slice = handles.slice(i, i + INGEST_BATCH_SIZE)
 
           const photos = await Promise.all(
             slice.map(async (handle) => {
@@ -81,8 +141,9 @@ export function usePhotoLoader() {
 
               let url = null
               if (isWeb) {
-                url = await createDisplayUrl(file)
+                url = URL.createObjectURL(file)
                 objectUrls.current.push(url)
+                displayQueue.push({ id: file.name, file, previewUrl: url })
               }
 
               return {
@@ -96,7 +157,7 @@ export function usePhotoLoader() {
                 rank: null,
                 sharpness: null,
               }
-            })
+            }),
           )
 
           if (cancelled) break
@@ -104,7 +165,6 @@ export function usePhotoLoader() {
           addPhotos(photos)
           setLoadedCount(i + photos.length)
 
-          // Set first photo as active as soon as the first batch lands
           if (firstBatch && photos.length > 0) {
             setCurrentId(photos[0].id)
             firstBatch = false
@@ -113,6 +173,8 @@ export function usePhotoLoader() {
       } catch (err) {
         if (!cancelled) setLoadError(err.message)
       } finally {
+        ingestDone = true
+        await displayTask
         if (!cancelled) {
           setLoading(false)
           setLoadingComplete(true)
@@ -125,7 +187,7 @@ export function usePhotoLoader() {
     return () => {
       cancelled = true
     }
-  }, [sourceDir]) // sourceDir identity change = new folder selected
+  }, [sourceDir, addPhotos, setCurrentId, orderLength])
 
   return { loading, loadingComplete, loadedCount, totalCount, loadError }
 }

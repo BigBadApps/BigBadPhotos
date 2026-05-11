@@ -31,6 +31,20 @@ export const useStore = create((set, get) => ({
       return { photos: newPhotos, order: [...state.order, ...photos.map(p => p.id)] }
     })
   },
+  batchSetPhotoDisplayUrls: (updates) => {
+    if (!updates.length) return
+    set((state) => {
+      const next = { ...state.photos }
+      let changed = false
+      for (const { id, url } of updates) {
+        const photo = next[id]
+        if (!photo || photo.url === url) continue
+        next[id] = { ...photo, url }
+        changed = true
+      }
+      return changed ? { photos: next } : state
+    })
+  },
   updatePhotoSharpness: (id, sharpness, rank) => {
     set((state) => ({
       photos: { ...state.photos, [id]: { ...state.photos[id], sharpness, rank } }
