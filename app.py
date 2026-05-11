@@ -8,11 +8,14 @@ import gc
 import secrets
 from datetime import timedelta
 from typing import Dict, List, Tuple
+from backend import google_drive
 
 try:
     from dotenv import load_dotenv
     load_dotenv()
     load_dotenv('.env.local', override=True)
+    load_dotenv(os.path.join('frontend', '.env.local'), override=True)
+    load_dotenv(os.path.join('frontend', 'env.local'), override=True)
 except ImportError:
     pass
 
@@ -34,7 +37,7 @@ if not IS_DEBUG:
     from werkzeug.middleware.proxy_fix import ProxyFix
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
-GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '') or os.environ.get('VITE_GOOGLE_CLIENT_ID', '')
 HAS_AUTH = bool(os.environ.get('BBP_PASSWORD')) or bool(GOOGLE_CLIENT_ID) or IS_DEBUG
 
 # Lazy-import google-auth only when GOOGLE_CLIENT_ID is configured.
@@ -65,7 +68,9 @@ API_ROUTES = {'/analyze', '/rank'}
 
 @app.before_request
 def enforce_auth():
-    if request.path not in API_ROUTES:
+    if request.path == '/drive/status':
+        return
+    if request.path not in API_ROUTES and not request.path.startswith('/drive'):
         return  # static files, /health, /auth/* all pass through
     if not HAS_AUTH:
         return  # No auth configured = open access
@@ -124,8 +129,23 @@ def auth_me():
     """Check current session. Frontend calls this on load."""
     user = session.get('user')
     if not user:
-        return jsonify({'authenticated': False}), 401
+        return jsonify({'authenticated': False})
     return jsonify({'authenticated': True, 'user': user})
+
+
+@app.post('/auth/dev')
+def auth_dev():
+    """Create a dev session when BBP_DEBUG/FLASK_DEBUG is enabled."""
+    if not IS_DEBUG:
+        return jsonify({'error': 'forbidden'}), 403
+    session['user'] = {
+        'email': 'dev@local',
+        'name': 'Dev User',
+        'picture': '',
+        'sub': 'dev',
+    }
+    session.permanent = True
+    return jsonify({'ok': True, 'user': session['user']})
 
 
 @app.get('/auth/config')
@@ -133,9 +153,11 @@ def auth_config():
     """Return available auth methods so the frontend renders the right sign-in UI."""
     return jsonify({
         'google': bool(GOOGLE_CLIENT_ID),
+        'googleClientId': GOOGLE_CLIENT_ID or None,
         'password': bool(os.environ.get('BBP_PASSWORD')),
         'dev': IS_DEBUG,
         'open': not HAS_AUTH,
+        'drive': bool(GOOGLE_CLIENT_ID),
     })
 
 
@@ -156,6 +178,122 @@ def auth_password():
     }
     session.permanent = True
     return jsonify({'ok': True, 'user': session['user']})
+
+
+def _drive_token() -> str | None:
+    return session.get('google_drive_token')
+
+
+def _drive_auth_error():
+    if not session.get('user'):
+        return jsonify({'error': 'not_authenticated'}), 401
+    if not _drive_token():
+        return jsonify({'error': 'drive_not_authorized'}), 401
+    return None
+
+
+@app.get('/drive/status')
+def drive_status():
+    """Lightweight Drive auth probe without treating missing access as an error."""
+    user = session.get('user')
+    if not user and IS_DEBUG and HAS_AUTH:
+        session['user'] = {
+            'email': 'dev@local',
+            'name': 'Dev User',
+            'picture': '',
+            'sub': 'dev',
+        }
+        session.permanent = True
+        user = session['user']
+    return jsonify({
+        'authenticated': bool(user),
+        'driveAuthorized': bool(user and _drive_token()),
+    })
+
+
+@app.post('/drive/authorize')
+def drive_authorize():
+    if not GOOGLE_CLIENT_ID:
+        return jsonify({'error': 'google_oauth_not_configured'}), 400
+    data = request.get_json(silent=True) or {}
+    access_token = (data.get('accessToken') or '').strip()
+    if not access_token:
+        return jsonify({'error': 'missing_access_token'}), 400
+    try:
+        info = google_drive.verify_access_token(access_token)
+    except Exception as exc:
+        return jsonify({'error': 'invalid_access_token', 'detail': str(exc)}), 401
+    if info.get('aud') != GOOGLE_CLIENT_ID:
+        return jsonify({'error': 'invalid_token_audience'}), 401
+    session['google_drive_token'] = access_token
+    session.permanent = True
+    return jsonify({'ok': True, 'expiresIn': info.get('expires_in')})
+
+
+@app.get('/drive/browse')
+def drive_browse():
+    err = _drive_auth_error()
+    if err:
+        return err
+    parent_id = request.args.get('parentId', 'root')
+    mode = request.args.get('mode', 'folders')
+    try:
+        if mode == 'images':
+            files = google_drive.list_images(_drive_token(), parent_id)
+        else:
+            files = google_drive.list_folders(_drive_token(), parent_id)
+    except Exception as exc:
+        return jsonify({'error': 'drive_list_failed', 'detail': str(exc)}), 502
+    return jsonify({'parentId': parent_id, 'mode': mode, 'items': files})
+
+
+@app.get('/drive/files/<file_id>')
+def drive_download(file_id):
+    err = _drive_auth_error()
+    if err:
+        return err
+    filename = request.args.get('name')
+    mime_type = request.args.get('mimeType')
+    try:
+        body, resolved_name, resolved_mime = google_drive.stream_file(
+            _drive_token(),
+            file_id,
+            filename=filename,
+            mime_type=mime_type,
+        )
+    except Exception as exc:
+        return jsonify({'error': 'drive_download_failed', 'detail': str(exc)}), 502
+    from flask import Response
+    return Response(body, mimetype=resolved_mime, headers={
+        'Content-Disposition': f'inline; filename="{resolved_name}"',
+    })
+
+
+@app.post('/drive/files')
+def drive_upload():
+    err = _drive_auth_error()
+    if err:
+        return err
+    parent_id = request.form.get('parentId') or request.args.get('parentId')
+    if not parent_id:
+        return jsonify({'error': 'missing_parent_id'}), 400
+    if 'file' not in request.files:
+        return jsonify({'error': 'missing_file'}), 400
+    upload = request.files['file']
+    payload = upload.read()
+    if not payload:
+        return jsonify({'error': 'empty_file'}), 400
+    try:
+        created = google_drive.upload_file(
+            _drive_token(),
+            parent_id,
+            upload.filename or 'upload.bin',
+            payload,
+            upload.mimetype,
+        )
+    except Exception as exc:
+        return jsonify({'error': 'drive_upload_failed', 'detail': str(exc)}), 502
+    return jsonify({'ok': True, 'file': created})
 
 
 @app.route('/', defaults={'path': ''})
@@ -437,9 +575,10 @@ def composite_score(sharpness: float, exposure: float,
 @app.get("/health")
 def health():
     return jsonify({
-        "status": "ok",
-        "model": "multi-metric-v1",
-        "metrics": ["sharpness", "exposure", "noise", "contrast"],
+        "status":        "ok",
+        "model":         "multi-metric-v1",
+        "metrics":       ["sharpness", "exposure", "noise", "contrast"],
+        "driveEnabled": bool(GOOGLE_CLIENT_ID),
     })
 
 
@@ -523,6 +662,7 @@ def rank():
                                 "missing_id": entry_id}), 400
 
             try:
+                file_obj.seek(0)
                 img_bytes = file_obj.read()
                 _, gray   = decode_image(img_bytes)
                 del img_bytes
@@ -636,4 +776,9 @@ if __name__ == "__main__":
 
     hostname = os.environ.get('BBP_HOSTNAME', '0.0.0.0')
     print(f"Starting BigBadPhotos on {scheme}://{hostname}:{port}")
-    app.run(debug=IS_DEBUG, host=hostname, port=port, ssl_context=ssl_context)
+    app.run(
+        debug=IS_DEBUG,
+        host=hostname,
+        port=port,
+        ssl_context=ssl_context,
+    )

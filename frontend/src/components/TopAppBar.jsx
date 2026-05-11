@@ -1,6 +1,5 @@
 import { useNavigate } from 'react-router-dom'
 import { useStore } from '../store'
-
 export default function TopAppBar() {
   const navigate  = useNavigate()
   const photos    = useStore(s => s.photos)

@@ -44,6 +44,7 @@ function PhotoPanel({ photo, side, isBestMatch, onKeep, onReject }) {
     <section className="compare-panel" style={{ flex: 1, background: '#000', overflow: 'hidden', position: 'relative' }}>
       {photo.url ? (
         <img
+          key={photo.url}
           src={photo.url}
           alt={photo.filename}
           className="compare-img"
@@ -143,7 +144,7 @@ function FilmstripThumb({ photo, isInPair, isLeft, onClick }) {
       }}
     >
       {photo?.url ? (
-        <img src={photo.url} alt={photo.filename} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        <img key={photo.url} src={photo.url} alt={photo.filename} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
       ) : (
         <div style={{ width: '100%', height: '100%', background: 'var(--bg-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Icon name="image" size={18} style={{ color: 'var(--fg-4)' }} />

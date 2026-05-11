@@ -11,6 +11,7 @@ export default defineConfig({
       '/analyze': 'http://localhost:8002',
       '/rank':    'http://localhost:8002',
       '/auth':    'http://localhost:8002',
+      '/drive':   'http://localhost:8002',
     },
   },
   build: {

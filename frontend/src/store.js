@@ -24,6 +24,7 @@ export const useStore = create((set, get) => ({
   }),
   setDestDir: (dir) => set({ destDir: dir }),
   setCurrentRoute: (route) => set({ currentRoute: route }),
+
   addPhotos: (photos) => {
     set((state) => {
       const newPhotos = { ...state.photos }

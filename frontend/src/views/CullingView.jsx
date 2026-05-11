@@ -327,8 +327,8 @@ export default function CullingView({ feedbackIntensity = 'pronounced', showInli
       <div className="culling-grid">
         {/* Main column */}
         <div className="culling-main">
-          {/* Photo frame */}
-          <div
+              {/* Photo frame */}
+              <div
             className="culling-viewer"
             onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
             style={{
@@ -345,6 +345,7 @@ export default function CullingView({ feedbackIntensity = 'pronounced', showInli
             {/* Photo or art */}
             {photo.url ? (
               <img
+                key={photo.url}
                 src={photo.url}
                 alt={photo.filename || ''}
                 style={{
@@ -446,7 +447,7 @@ export default function CullingView({ feedbackIntensity = 'pronounced', showInli
                     }}
                   >
                     {p?.url ? (
-                      <img src={p.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} draggable={false} />
+                      <img key={p.url} src={p.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} draggable={false} />
                     ) : (
                       <div style={{ width: '100%', height: '100%', display: 'grid', placeItems: 'center', color: 'var(--fg-4)' }}>
                         <Icon name="image" size={20} />

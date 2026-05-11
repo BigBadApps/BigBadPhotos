@@ -454,3 +454,80 @@ img { display: block; max-width: 100%; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* HUD & Status Animations */
+@keyframes pulse-cyan {
+  0% { box-shadow: 0 0 0 0 rgba(0,209,255,0.4); }
+  70% { box-shadow: 0 0 0 6px rgba(0,209,255,0); }
+  100% { box-shadow: 0 0 0 0 rgba(0,209,255,0); }
+}
+.hud-pulse { animation: pulse-cyan 2s infinite; }
+
+/* Connection HUD styling */
+.connection-hud {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--tracking-wider);
+}
+.hud-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--fg-4);
+}
+.hud-dot.active {
+  background: #00d1ff;
+  box-shadow: 0 0 6px #00d1ff;
+}
+
+/* Scrubber & Live Feed */
+.burst-tray {
+  position: fixed;
+  bottom: 80px;
+  right: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 100;
+}
+
+.scrubber-track {
+  position: relative;
+  height: 4px;
+  background: var(--bg-3);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.scrubber-fill {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  background: var(--accent);
+}
+
+.live-feed-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 16px;
+  padding: 24px;
+  overflow-y: auto;
+  height: 100%;
+}
+.live-frame {
+  aspect-ratio: 3/2;
+  background: var(--bg-3);
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+
+@keyframes curtain {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}

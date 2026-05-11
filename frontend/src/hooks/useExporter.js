@@ -1,5 +1,10 @@
 import { useState, useCallback } from 'react'
 import { useStore } from '../store'
+import {
+  ensureDriveWriteSession,
+  isDriveExportAbortError,
+  uploadDriveFile,
+} from '../utils/googleDrive'
 
 const HAS_DIR_PICKER = typeof window !== 'undefined' && 'showDirectoryPicker' in window
 
@@ -59,6 +64,8 @@ export function useExporter() {
       return
     }
 
+    const driveDest = destDir?._drive ? destDir.folderId : null
+
     setExporting(true)
     setExportDone(false)
     setExportError(null)
@@ -68,6 +75,7 @@ export function useExporter() {
 
     const failed = []
     let completedOk = false
+    let driveBackendDown = false
     const keeps = Object.values(photos).filter(p => p.decision === 'keep').map(p => p.filename)
     const maybes = Object.values(photos).filter(p => p.decision === 'maybe').map(p => p.filename)
     const rejects = Object.values(photos).filter(p => p.decision === 'reject').map(p => p.filename)
@@ -86,7 +94,49 @@ export function useExporter() {
     }
 
     try {
-      if (!HAS_DIR_PICKER) {
+      if (driveDest) {
+        await ensureDriveWriteSession()
+        for (let i = 0; i < queue.length; i++) {
+          const photo = queue[i]
+          try {
+            const convertToJpeg = fileFormat === 'jpg' && !photo.isRaw
+            const exportName = convertToJpeg
+              ? photo.filename.replace(/\.[^.]+$/, '.jpg')
+              : photo.filename
+            const blob = convertToJpeg ? await encodeAsJpeg(photo.file) : photo.file
+            const file = blob instanceof File
+              ? new File([blob], exportName, { type: blob.type || 'application/octet-stream' })
+              : new File([blob], exportName, { type: blob.type || 'application/octet-stream' })
+            await uploadDriveFile(driveDest, file)
+            setExportedCount(i + 1)
+          } catch (err) {
+            failed.push({ filename: photo.filename, reason: err.message })
+            setExportedCount(i + 1)
+            if (isDriveExportAbortError(err)) {
+              setExportError(err.message)
+              driveBackendDown = true
+              break
+            }
+          }
+        }
+
+        if (!driveBackendDown) {
+          try {
+            const jsonBlob = new Blob([JSON.stringify(decisionsPayload, null, 2)], { type: 'application/json' })
+            await uploadDriveFile(
+              driveDest,
+              new File([jsonBlob], 'bigbad_decisions.json', { type: 'application/json' }),
+            )
+          } catch (err) {
+            failed.push({ filename: 'bigbad_decisions.json', reason: err.message })
+            if (isDriveExportAbortError(err)) {
+              setExportError(err.message)
+              driveBackendDown = true
+            }
+          }
+        }
+        completedOk = !driveBackendDown
+      } else if (!HAS_DIR_PICKER) {
         try {
           const files = await Promise.all(queue.map(async (photo) => {
             const blob = fileFormat === 'jpg' && !photo.isRaw

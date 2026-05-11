@@ -11,6 +11,15 @@ import ReviewExportView from './views/ReviewExportView';
 import { usePhotoLoader } from './hooks/usePhotoLoader';
 import { usePhotoRanker } from './hooks/usePhotoRanker';
 import { useSessionPersistence } from './hooks/useSessionPersistence';
+import GoogleDriveFolderPicker from './components/GoogleDriveFolderPicker';
+import {
+  DRIVE_SCOPES,
+  authorizeDriveToken,
+  hasValidDriveSession,
+  prepareDriveAuth,
+  requestDriveAccessFromGesture,
+  resumeDriveRedirectIfNeeded,
+} from './utils/googleDrive';
 
 const HAS_DIR_PICKER = typeof window !== 'undefined' && 'showDirectoryPicker' in window;
 
@@ -18,6 +27,15 @@ function AppContent() {
   const navigate = useNavigate();
   const location = useLocation();
   const [help, setHelp] = useState(false);
+  const [drivePicker, setDrivePicker] = useState(null);
+  const [driveError, setDriveError] = useState(null);
+  const [driveConnecting, setDriveConnecting] = useState(false);
+  const [driveConnectLabel, setDriveConnectLabel] = useState('');
+  const [driveAvailable, setDriveAvailable] = useState(false);
+  const [driveAuthReady, setDriveAuthReady] = useState(false);
+  const [authDev, setAuthDev] = useState(false);
+  const driveSessionReady = useRef(false);
+  const driveConfigRef = useRef(null);
 
   const sourceDir    = useStore(state => state.sourceDir);
   const destDir      = useStore(state => state.destDir);
@@ -30,7 +48,6 @@ function AppContent() {
   const exportInputRef = useRef(null);
   const photos       = useStore(state => state.photos);
   const order        = useStore(state => state.order);
-
   const { loading: photoLoading, loadingComplete, loadedCount, totalCount, loadError } = usePhotoLoader();
   const {
     scoring,
@@ -58,7 +75,67 @@ function AppContent() {
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, [navigate]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/auth/config', { credentials: 'include' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((config) => {
+        if (cancelled || !config) return;
+        setDriveAvailable(Boolean(config.drive && config.googleClientId));
+        setAuthDev(Boolean(config.dev));
+      })
+      .catch(() => {
+        if (!cancelled) setDriveAvailable(false);
+      });
+    return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (!driveAvailable) {
+      setDriveAuthReady(false);
+      driveSessionReady.current = false;
+      driveConfigRef.current = null;
+      return undefined;
+    }
+
+    let cancelled = false;
+    prepareDriveAuth()
+      .then(async (config) => {
+        if (cancelled) return;
+        driveConfigRef.current = config;
+        driveSessionReady.current = await hasValidDriveSession();
+        setDriveAuthReady(true);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          driveSessionReady.current = false;
+          setDriveAuthReady(false);
+        }
+      });
+
+    return () => { cancelled = true; };
+  }, [driveAvailable]);
+
+  useEffect(() => {
+    if (!driveAvailable) return undefined;
+
+    let cancelled = false;
+    resumeDriveRedirectIfNeeded()
+      .then((pending) => {
+        if (cancelled || (pending !== 'source' && pending !== 'export')) return;
+        driveSessionReady.current = true;
+        setDrivePicker(pending);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setDriveError(err?.message || 'Google Drive authorization failed');
+        }
+      });
+
+    return () => { cancelled = true; };
+  }, [driveAvailable]);
 
   const WEB_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp']);
   const IMG_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'raw', 'arw', 'cr2', 'cr3', 'nef', 'dng', 'orf', 'rw2', 'raf', 'tif', 'tiff']);
@@ -133,9 +210,16 @@ function AppContent() {
   const scoringComplete =
     scoreableCount === 0 || (scoringPct === 100 && !scoring);
 
+  const formatFolderLabel = (dir, fallback) => {
+    if (!dir) return ''
+    if (dir._drive) return `Drive · ${dir.name}`
+    return dir.name || fallback
+  }
+
   const landingState = {
-    source:          sourceDir?.name || '',
-    exportTarget:    HAS_DIR_PICKER ? (destDir?.name || '') : (destDir?.name || 'Downloads'),
+    source:          formatFolderLabel(sourceDir, ''),
+    exportTarget:    formatFolderLabel(destDir, HAS_DIR_PICKER ? '' : 'Downloads'),
+    driveAvailable,
     total:           totalCount || order.length,
     fileType,
     scored:          scoredCount,
@@ -152,15 +236,65 @@ function AppContent() {
     etaSeconds,
     scoringStarted,
     scoringComplete,
+    driveError,
+    driveConnecting,
+    driveAuthReady,
+    dev: authDev,
   };
 
   const hasPhotos = order.length > 0;
   const reviewReady =
     !!sourceDir &&
-    (!!destDir?.name || !HAS_DIR_PICKER) &&
+    (!!destDir?.name || destDir?._drive || !HAS_DIR_PICKER) &&
     loadingComplete &&
     hasPhotos &&
     scoringComplete;
+
+  const openDrivePicker = useCallback((target) => {
+    if (driveConnecting) return;
+    setDriveError(null);
+    setDriveConnectLabel(target === 'export' ? 'export folder' : 'source folder');
+
+    if (target === 'source' && driveSessionReady.current) {
+      setDrivePicker(target);
+      return;
+    }
+
+    const clientId = driveConfigRef.current?.googleClientId;
+    const scope = target === 'export' ? DRIVE_SCOPES.write : DRIVE_SCOPES.read;
+
+    if (!driveAuthReady || !clientId || !window.google?.accounts?.oauth2) {
+      setDriveError('Google sign-in is still loading. Wait a moment and try again.');
+      return;
+    }
+
+    setDriveConnecting(true);
+    requestDriveAccessFromGesture({ clientId, scope, prompt: '' })
+      .then((accessToken) => authorizeDriveToken(accessToken))
+      .then(() => {
+        driveSessionReady.current = true;
+        setDrivePicker(target);
+      })
+      .catch((err) => {
+        if (err?.name !== 'AbortError') {
+          setDriveError(err?.message || 'Google Drive authorization failed');
+        }
+      })
+      .finally(() => {
+        setDriveConnecting(false);
+        setDriveConnectLabel('');
+      });
+  }, [driveAuthReady, driveConnecting]);
+
+  const handleDriveFolderSelect = useCallback(({ id, name }) => {
+    if (drivePicker === 'source') {
+      clearPhotos();
+      setSourceDir({ _drive: true, folderId: id, name });
+    } else if (drivePicker === 'export') {
+      setDestDir({ _drive: true, folderId: id, name });
+    }
+    setDrivePicker(null);
+  }, [drivePicker, clearPhotos, setSourceDir, setDestDir]);
 
   return (
     <div className="app-root">
@@ -214,6 +348,8 @@ function AppContent() {
               state={landingState}
               onSelectSource={pickSource}
               onSelectExport={HAS_DIR_PICKER ? pickExport : undefined}
+              onSelectDriveSource={driveAvailable ? () => openDrivePicker('source') : undefined}
+              onSelectDriveExport={driveAvailable ? () => openDrivePicker('export') : undefined}
               onBeginScoring={beginScoring}
               onBegin={() => navigate('/cull')}
               reviewReady={reviewReady}
@@ -223,6 +359,37 @@ function AppContent() {
           <Route path="/compare" element={hasPhotos ? <CompareView /> : <Navigate to="/" />} />
           <Route path="/review"  element={hasPhotos ? <ReviewExportView /> : <Navigate to="/" />} />
         </Routes>
+        {driveConnecting && (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 90,
+              background: 'rgba(0,0,0,.55)',
+              display: 'grid',
+              placeItems: 'center',
+              padding: 'var(--sp-5)',
+            }}
+          >
+            <div className="card" style={{ width: 'min(420px, 100%)', padding: 'var(--sp-6)', textAlign: 'center' }}>
+              <div className="meta" style={{ marginBottom: 'var(--sp-3)' }}>Google Drive</div>
+              <div className="fs-md" style={{ fontWeight: 600, marginBottom: 'var(--sp-3)' }}>
+                Connecting to your {driveConnectLabel || 'folder'}
+              </div>
+              <p className="fs-sm" style={{ color: 'var(--fg-3)', lineHeight: 1.5, margin: 0 }}>
+                Finish sign-in in the Google window if one opened. This page stays here while access is granted.
+              </p>
+            </div>
+          </div>
+        )}
+        <GoogleDriveFolderPicker
+          open={drivePicker != null}
+          title={drivePicker === 'export' ? 'Choose export folder' : 'Choose source folder'}
+          onClose={() => setDrivePicker(null)}
+          onSelect={handleDriveFolderSelect}
+        />
         <HelpOverlay open={help} onClose={() => setHelp(false)} />
       </div>
 

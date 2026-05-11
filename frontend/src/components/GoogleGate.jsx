@@ -59,11 +59,23 @@ function AuthGate({ onAuthed, authConfig }) {
     }
   }
 
-  function tryDev() {
-    setState('success');
+  async function tryDev() {
+    setState('loading');
     setHint('Dev mode — entering workspace…');
-    useStore.getState().setAuthSessionExpired(false);
-    setTimeout(() => onAuthed(), 400);
+    try {
+      const res = await fetch('/auth/dev', { method: 'POST', credentials: 'include' });
+      if (!res.ok) {
+        setState('error');
+        setHint('Dev sign-in failed. Check that BBP_DEBUG=1 is set on the server.');
+        return;
+      }
+      setState('success');
+      useStore.getState().setAuthSessionExpired(false);
+      setTimeout(() => onAuthed(), 400);
+    } catch {
+      setState('error');
+      setHint('Could not reach the server. Is it running?');
+    }
   }
 
   const busy = state === 'loading' || state === 'success';
@@ -138,7 +150,19 @@ function AuthGate({ onAuthed, authConfig }) {
           {authConfig?.password && (
             <form onSubmit={tryPassword} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
               <input
+                type="text"
+                name="username"
+                autoComplete="username"
+                tabIndex={-1}
+                aria-hidden="true"
+                value="bigbadphotos"
+                readOnly
+                style={{ position: 'absolute', left: '-9999px', width: 1, height: 1, opacity: 0 }}
+              />
+              <input
                 type="password"
+                name="password"
+                autoComplete="current-password"
                 value={password}
                 onChange={e => { setPassword(e.target.value); if (state === 'error') setState('default'); }}
                 placeholder="Enter access password"
