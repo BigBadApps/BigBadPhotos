@@ -45,9 +45,14 @@ export function usePhotoRanker(loadingComplete) {
     if (scoringRunId === 0 || !loadingComplete) return
 
     const { order: o, photos: ph } = useStore.getState()
-    const scoreable = o
-      .map((id) => ph[id])
-      .filter((p) => p && !p.isRaw && p.file)
+    const seen = new Set()
+    const scoreable = []
+    for (const id of o) {
+      const photo = ph[id]
+      if (!photo || photo.isRaw || !photo.file || seen.has(id)) continue
+      seen.add(id)
+      scoreable.push(photo)
+    }
 
     if (scoreable.length === 0) return
 

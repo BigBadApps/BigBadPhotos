@@ -12,7 +12,7 @@ export async function rankPhotos(photos) {
     formData.append(photo.id, photo.file, photo.filename)
   }
 
-  const res = await fetch('/rank', { method: 'POST', body: formData })
+  const res = await fetch('/rank', { method: 'POST', body: formData, credentials: 'include' })
   if (!res.ok) {
     let detail = `HTTP ${res.status}`
     try {

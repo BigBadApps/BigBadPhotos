@@ -1,7 +1,5 @@
 import { useNavigate } from 'react-router-dom'
 import { useStore } from '../store'
-import ConnectionHUD from './ConnectionHUD'
-
 export default function TopAppBar() {
   const navigate  = useNavigate()
   const photos    = useStore(s => s.photos)
@@ -39,7 +37,6 @@ export default function TopAppBar() {
             {statusText}
           </span>
         </div>
-        <ConnectionHUD />
         <div className="flex items-center gap-1">
           <button
             onClick={() => navigate('/review')}

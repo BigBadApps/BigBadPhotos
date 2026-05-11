@@ -25,30 +25,6 @@ export const useStore = create((set, get) => ({
   setDestDir: (dir) => set({ destDir: dir }),
   setCurrentRoute: (route) => set({ currentRoute: route }),
 
-  // ── Camera Bridge state ──────────────────────────────────────────────────────
-  bursts:        [],   // [{ burstId, previewUrl, frameCount, fps }] newest first
-  burstHeroes:   {},   // burstId → { frameIndex, heroUrl }
-  liveFrames:    [],   // [{ frameId, url, isBurst?, burstId? }] newest first, max 200
-  bridgeEnabled: false,
-  ftpPort:       null,
-
-  addBurst: (burst) => set(s => ({
-    bursts: [burst, ...s.bursts].slice(0, 20),
-  })),
-
-  setBurstHero: ({ burstId, frameIndex, heroUrl }) => set(s => ({
-    burstHeroes: { ...s.burstHeroes, [burstId]: { frameIndex, heroUrl } },
-  })),
-
-  addLiveFrame: (frame) => set(s => ({
-    liveFrames: [frame, ...s.liveFrames].slice(0, 200),
-  })),
-
-  setBridgeStatus: ({ enabled, ftpPort }) => set({
-    bridgeEnabled: enabled,
-    ftpPort,
-  }),
-
   addPhotos: (photos) => {
     set((state) => {
       const newPhotos = { ...state.photos }

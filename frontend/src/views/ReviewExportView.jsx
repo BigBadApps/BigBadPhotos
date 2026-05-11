@@ -210,7 +210,7 @@ export default function ReviewExportView() {
             {[...keeps, ...(includeMaybes ? maybes : [])].map(photo => (
               <div key={photo.id} style={{ position: 'relative', aspectRatio: '1', borderRadius: 8, overflow: 'hidden', background: 'var(--bg-3)' }}>
                 {photo.url ? (
-                  <img src={photo.url} alt={photo.filename || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  <img key={photo.url} src={photo.url} alt={photo.filename || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                 ) : (
                   <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <Icon name="image" size={32} style={{ color: 'var(--fg-4)' }} />

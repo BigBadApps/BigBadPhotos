@@ -62,7 +62,8 @@ export default function LandingView({
   onSelectExport,
   onBeginScoring,
   onBegin,
-  onLiveMode,
+  onSelectDriveSource,
+  onSelectDriveExport,
   reviewReady = false,
 }) {
   const {
@@ -72,6 +73,11 @@ export default function LandingView({
     scoring = false, scoreError = null, backendAvailable = true,
     authExpired = false, hasPhotos = false,
     etaSeconds = null, scoringStarted = false, scoringComplete = true,
+    driveError = null,
+    driveAvailable = false,
+    driveConnecting = false,
+    driveAuthReady = false,
+    dev = false,
   } = state || {};
 
   const scoringPct = scoreableCount > 0
@@ -205,7 +211,7 @@ export default function LandingView({
                   }.`
                   : source && isLoading
                   ? `Loading photos from ${source}…`
-                  : 'Pick a source folder, set an export target, and step into the darkroom.'}
+                  : 'Pick a local or Google Drive source folder, set an export target, and step into the darkroom.'}
               </p>
             </div>
             <div className="meta" style={{ flexShrink: 0, textAlign: 'right' }}>
@@ -234,26 +240,32 @@ export default function LandingView({
         {/* Controls column */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap)', minWidth: 0 }}>
           
-          {/* Camera Bridge */}
           <div className="card" style={{ padding: 'var(--sp-5)' }}>
-            <div className="meta" style={{ marginBottom: 'var(--sp-4)' }}>Live Field Review</div>
-            <button
-              onClick={onLiveMode}
-              className="btn btn-secondary btn-uppercase"
-              style={{ width: '100%', height: 48, fontSize: 'var(--fs-sm)' }}
-            >
-              <Icon name="aperture" size={16} />
-              <span>Connect Camera</span>
-            </button>
-          </div>
-
-          {/* Folder pickers */}
-          <div className="card" style={{ padding: 'var(--sp-5)' }}>
-            <div className="meta" style={{ marginBottom: 'var(--sp-4)' }}>Post-Session Review</div>
+            <div className="meta" style={{ marginBottom: 'var(--sp-4)' }}>Session folders</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
-              <FolderRow kind="Source" label="Select source folder" value={source} onPick={onSelectSource} accent={!source} />
-              <FolderRow kind="Export Target" label="Where keepers go" value={exportTarget} onPick={onSelectExport} />
+              <FolderRow kind="Source" label="Select local folder" value={source} onPick={onSelectSource} accent={!source} />
+              {onSelectDriveSource && (
+                <button type="button" className="btn btn-secondary btn-uppercase" onClick={onSelectDriveSource} disabled={driveConnecting || !driveAuthReady}>
+                  {driveConnecting ? 'Connecting to Google Drive…' : !driveAuthReady ? 'Preparing Google Drive…' : 'Choose Google Drive source'}
+                </button>
+              )}
+              <FolderRow kind="Export Target" label="Select local export folder" value={exportTarget} onPick={onSelectExport} />
+              {onSelectDriveExport && (
+                <button type="button" className="btn btn-secondary btn-uppercase" onClick={onSelectDriveExport} disabled={driveConnecting || !driveAuthReady}>
+                  {driveConnecting ? 'Connecting to Google Drive…' : !driveAuthReady ? 'Preparing Google Drive…' : 'Choose Google Drive export folder'}
+                </button>
+              )}
             </div>
+            {!driveAvailable && dev && (
+              <div className="fs-xs" style={{ color: 'var(--fg-3)', marginTop: 'var(--sp-3)' }}>
+                Google Drive needs <span className="mono">GOOGLE_CLIENT_ID</span> in <span className="mono">.env</span> or <span className="mono">frontend/.env.local</span>, the Drive API enabled in Google Cloud, and a Flask restart on port 8002.
+              </div>
+            )}
+            {driveError && (
+              <div className="fs-xs" style={{ color: 'var(--reject)', marginTop: 'var(--sp-3)' }}>
+                {driveError}
+              </div>
+            )}
           </div>
 
           {/* Library / progress card */}

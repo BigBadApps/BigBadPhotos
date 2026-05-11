@@ -3,7 +3,6 @@ import { useStore } from '../store';
 import Icon from '../components/Icon';
 import ScoreBar from '../components/ScoreBar';
 import DecisionBadge from '../components/DecisionBadge';
-import LiveFeedGrid from '../components/LiveFeedGrid';
 
 /** 0–1 scores from /rank (nested objects use *_score keys). */
 function photoMetrics01(p) {
@@ -143,8 +142,6 @@ export default function CullingView({ feedbackIntensity = 'pronounced', showInli
   const [swipeDy, setSwipeDy] = useState(0);
   const [swiping, setSwiping] = useState(false);
   const [filterMode, setFilterMode] = useState('all');
-  const [viewMode, setViewMode] = useState('library');
-  const liveFrameCount = useStore(s => s.liveFrames.length);
   const [selection, setSelection] = useState(() => new Set());
 
   const activeOrder = useMemo(
@@ -330,8 +327,6 @@ export default function CullingView({ feedbackIntensity = 'pronounced', showInli
       <div className="culling-grid">
         {/* Main column */}
         <div className="culling-main">
-          {viewMode === 'live' ? <LiveFeedGrid /> : (
-            <>
               {/* Photo frame */}
               <div
             className="culling-viewer"
@@ -350,6 +345,7 @@ export default function CullingView({ feedbackIntensity = 'pronounced', showInli
             {/* Photo or art */}
             {photo.url ? (
               <img
+                key={photo.url}
                 src={photo.url}
                 alt={photo.filename || ''}
                 style={{
@@ -451,7 +447,7 @@ export default function CullingView({ feedbackIntensity = 'pronounced', showInli
                     }}
                   >
                     {p?.url ? (
-                      <img src={p.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} draggable={false} />
+                      <img key={p.url} src={p.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} draggable={false} />
                     ) : (
                       <div style={{ width: '100%', height: '100%', display: 'grid', placeItems: 'center', color: 'var(--fg-4)' }}>
                         <Icon name="image" size={20} />
@@ -491,13 +487,11 @@ export default function CullingView({ feedbackIntensity = 'pronounced', showInli
 
           <DecisionDock counts={counts} decision={decision} decide={decide} undo={undo} canUndo={historyLen > 0} showInlineKbd={showInlineKbd} />
 
-              <div className="meta ta-c culling-session-meta" style={{ color: 'var(--fg-3)' }}>
-                {decided > 0
-                  ? <>&middot; {counts.keep} kept &middot; {counts.maybe} maybe &middot; {counts.reject} rejected &middot;</>
-                  : <>&middot; Press P / M / R &middot; or swipe &middot;</>}
-              </div>
-            </>
-          )}
+          <div className="meta ta-c culling-session-meta" style={{ color: 'var(--fg-3)' }}>
+            {decided > 0
+              ? <>&middot; {counts.keep} kept &middot; {counts.maybe} maybe &middot; {counts.reject} rejected &middot;</>
+              : <>&middot; Press P / M / R &middot; or swipe &middot;</>}
+          </div>
         </div>
 
         {/* Sidebar */}
@@ -539,14 +533,6 @@ export default function CullingView({ feedbackIntensity = 'pronounced', showInli
           <div className="card" style={{ padding: 'var(--sp-5)' }}>
             <div className="meta" style={{ marginBottom: 'var(--sp-3)' }}>AI browse</div>
             <label className="fs-xxs dim mono upper" style={{ display: 'block', marginBottom: 6 }}>Filter</label>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 'var(--sp-3)' }}>
-              <button onClick={() => setViewMode('library')} className="btn btn-ghost btn-uppercase" style={{ flex: 1, background: viewMode === 'library' ? 'var(--bg-3)' : 'transparent' }}>
-                Library
-              </button>
-              <button onClick={() => setViewMode('live')} className="btn btn-ghost btn-uppercase" style={{ flex: 1, background: viewMode === 'live' ? 'var(--bg-3)' : 'transparent' }}>
-                LIVE {liveFrameCount > 0 && <span className="text-cyan-400">({liveFrameCount})</span>}
-              </button>
-            </div>
             <select
               className="fs-sm"
               value={filterMode}
