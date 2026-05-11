@@ -87,25 +87,31 @@ export default function LandingView({
     && !scoring
     && !(scoringPct === 100 && scoringStarted);
 
-  const order = useStore((s) => s.order);
-  const photos = useStore((s) => s.photos);
   const [heroPhotoId, setHeroPhotoId] = useState(null);
+  const previewableCount = useStore((s) => {
+    let count = 0;
+    for (const id of s.order) {
+      if (s.photos[id]?.url) count += 1;
+    }
+    return count;
+  });
 
   useEffect(() => {
     setHeroPhotoId(null);
   }, [source]);
 
   useEffect(() => {
-    if (!source) return;
+    if (!source || previewableCount === 0) return;
+    const { order, photos } = useStore.getState();
     const ids = order.filter((id) => photos[id]?.url);
     if (ids.length === 0) return;
     setHeroPhotoId((prev) => {
       if (prev && ids.includes(prev)) return prev;
       return ids[Math.floor(Math.random() * ids.length)];
     });
-  }, [source, order, photos]);
+  }, [source, previewableCount]);
 
-  const heroUrl = heroPhotoId ? photos[heroPhotoId]?.url : null;
+  const heroUrl = useStore((s) => (heroPhotoId ? s.photos[heroPhotoId]?.url : null));
 
   return (
     <div className="view">
