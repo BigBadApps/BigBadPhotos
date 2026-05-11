@@ -29,6 +29,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application source
 COPY app.py ./
+COPY backend/__init__.py backend/google_drive.py ./backend/
 
 # Copy the built frontend from Stage 1
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
