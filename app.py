@@ -8,6 +8,10 @@ import gc
 import secrets
 from datetime import timedelta
 from typing import Dict, List, Tuple
+from flask_sock import Sock
+import threading
+from backend.ftp_ingest import start_ftp_thread
+from backend.burst_watcher import start_burst_watcher
 
 try:
     from dotenv import load_dotenv
@@ -29,6 +33,94 @@ app.config.update(
     SESSION_COOKIE_SAMESITE='Lax',
     PERMANENT_SESSION_LIFETIME=timedelta(days=7),
 )
+
+sock = Sock(app)
+
+# ── Camera Bridge state ──────────────────────────────────────────────────────
+_burst_registry: dict[str, dict] = {}
+_burst_lock   = threading.Lock()
+_ws_clients:  set = set()
+_ws_lock      = threading.Lock()
+_camera_connected = False          # True while FTP session is active
+_camera_lock  = threading.Lock()
+
+
+def _broadcast(payload: dict):
+    """Fan-out JSON to all authenticated WS clients. Prunes dead connections."""
+    msg = json.dumps(payload)
+    with _ws_lock:
+        dead = set()
+        for ws in _ws_clients:
+            try:
+                ws.send(msg)
+            except Exception:
+                dead.add(ws)
+        _ws_clients -= dead
+
+
+def _on_frame_arrived(src_path: str):
+    """Fired for EVERY incoming frame — drives the Live Feed Grid."""
+    preview_dir = os.environ.get('BBP_PREVIEW_DIR', '/tmp/bbp_preview')
+    resize_px   = int(os.environ.get('BBP_RESIZE_PX', '1080'))
+    # Create a single-frame burst dir for consistency
+    frame_id  = os.path.splitext(os.path.basename(src_path))[0]
+    frame_dir = os.path.join(preview_dir, 'frames')
+    os.makedirs(frame_dir, exist_ok=True)
+    dest = os.path.join(frame_dir, f'{frame_id}.jpg')
+    try:
+        from PIL import Image
+        with Image.open(src_path) as img:
+            img.thumbnail((resize_px, resize_px), Image.LANCZOS)
+            img.save(dest, 'JPEG', quality=88)
+        _broadcast({
+            'type': 'frame_arrived',
+            'frameId': frame_id,
+            'url': f'/burst/stream/frames/{frame_id}.jpg',
+        })
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"frame_arrived resize failed: {e}")
+
+
+def _on_burst_ready(burst_id: str, webm_path: str, frame_paths: list):
+    """Fired when FFmpeg finishes stitching a burst."""
+    with _burst_lock:
+        _burst_registry[burst_id] = {
+            'webm_path':   webm_path,
+            'frame_paths': frame_paths,
+        }
+    _broadcast({
+        'type':       'burst_ready',
+        'burstId':    burst_id,
+        'previewUrl': f'/burst/stream/{burst_id}/{burst_id}.webm',
+        'frameCount': len(frame_paths),
+        'fps':        int(os.environ.get('BBP_FFMPEG_FPS', '60')),
+    })
+
+
+# ── Start Camera Bridge if configured ───────────────────────────────────────
+_FTP_PASS = os.environ.get('BBP_FTP_PASS', '')
+if _FTP_PASS:
+    start_ftp_thread(
+        root     = os.environ.get('BBP_FTP_ROOT', '/tmp/bbp_burst'),
+        port     = int(os.environ.get('BBP_FTP_PORT', '2121')),
+        user     = os.environ.get('BBP_FTP_USER', 'bbp'),
+        password = _FTP_PASS,
+    )
+    start_burst_watcher(
+        ingest_root      = os.environ.get('BBP_FTP_ROOT', '/tmp/bbp_burst'),
+        preview_dir      = os.environ.get('BBP_PREVIEW_DIR', '/tmp/bbp_preview'),
+        ffmpeg_fps       = int(os.environ.get('BBP_FFMPEG_FPS', '60')),
+        resize_px        = int(os.environ.get('BBP_RESIZE_PX', '1080')),
+        window_ms        = int(os.environ.get('BBP_BURST_WINDOW_MS', '500')),
+        min_frames       = int(os.environ.get('BBP_BURST_MIN_FRAMES', '5')),
+        max_age_seconds  = int(os.environ.get('BBP_BURST_MAX_AGE_SECONDS', '3600')),
+        on_frame_arrived = _on_frame_arrived,
+        on_burst_ready   = _on_burst_ready,
+    )
+    print(f"✅  Camera Bridge active on FTP port {os.environ.get('BBP_FTP_PORT', '2121')}")
+else:
+    print("⚠️  BBP_FTP_PASS not set — Camera Bridge disabled")
 
 if not IS_DEBUG:
     from werkzeug.middleware.proxy_fix import ProxyFix
@@ -61,7 +153,7 @@ if not ALLOWED_EMAILS:
     print("⚠️  BBP_ALLOWED_EMAILS is empty — all logins will be rejected")
 
 
-API_ROUTES = {'/analyze', '/rank'}
+API_ROUTES = {'/analyze', '/rank', '/burst/select', '/burst/list', '/burst/status'}
 
 @app.before_request
 def enforce_auth():
@@ -156,6 +248,133 @@ def auth_password():
     }
     session.permanent = True
     return jsonify({'ok': True, 'user': session['user']})
+
+
+# ── WebSocket ────────────────────────────────────────────────────────────────
+
+@sock.route('/ws')
+def ws_endpoint(ws):
+    """
+    Real-time Camera Bridge events.
+    IMPORTANT: before_request is NOT called for Flask-Sock routes.
+    Session IS available here during the WS upgrade request context.
+    The session check below is the ONLY auth gate for this endpoint.
+    """
+    if not session.get('user'):
+        ws.close(reason='not_authenticated')
+        return
+
+    with _ws_lock:
+        _ws_clients.add(ws)
+    try:
+        while True:
+            msg = ws.receive(timeout=30)
+            if msg is None:
+                break
+            if msg == 'ping':
+                ws.send('pong')
+    except Exception:
+        pass
+    finally:
+        with _ws_lock:
+            _ws_clients.discard(ws)
+
+
+# ── Camera Bridge file serving ───────────────────────────────────────────────
+
+@app.get('/burst/stream/<path:subpath>')
+def serve_burst_file(subpath):
+    """
+    Serves resized preview frames and WebM files.
+    URL pattern: /burst/stream/<burst_id>/<filename>
+                 /burst/stream/frames/<frame_id>.jpg
+    Path traversal guard included.
+    """
+    if not session.get('user'):
+        return jsonify({'error': 'not_authenticated'}), 401
+    preview_dir = os.environ.get('BBP_PREVIEW_DIR', '/tmp/bbp_preview')
+    target = os.path.realpath(os.path.join(preview_dir, subpath))
+    if not target.startswith(os.path.realpath(preview_dir)):
+        return jsonify({'error': 'forbidden'}), 403
+    directory = os.path.dirname(target)
+    filename  = os.path.basename(target)
+    return send_from_directory(directory, filename)
+
+
+# ── Hero frame selection ─────────────────────────────────────────────────────
+
+@app.post('/burst/select')
+def burst_select():
+    """
+    User picks a hero frame from the BurstScrubber.
+    Body: { burstId: str, frameIndex: int }
+    Returns: { heroUrl: str }
+    The resized 1080px preview frame IS the social deliverable.
+    Full-res originals remain on the SD card (field workflow).
+    """
+    if not session.get('user'):
+        return jsonify({'error': 'not_authenticated'}), 401
+
+    data = request.get_json(silent=True) or {}
+    burst_id    = data.get('burstId')
+    frame_index = data.get('frameIndex')
+    if not burst_id or frame_index is None:
+        return jsonify({'error': 'missing_fields'}), 400
+
+    with _burst_lock:
+        burst = _burst_registry.get(burst_id)
+    if not burst:
+        return jsonify({'error': 'burst_not_found'}), 404
+
+    paths = burst['frame_paths']
+    idx   = int(frame_index)
+    if not (0 <= idx < len(paths)):
+        return jsonify({'error': 'frame_index_out_of_range'}), 400
+
+    filename = os.path.basename(paths[idx])
+    return jsonify({
+        'burstId':    burst_id,
+        'frameIndex': idx,
+        'heroUrl':    f'/burst/stream/{burst_id}/{filename}',
+    })
+
+
+# ── Camera Bridge status ─────────────────────────────────────────────────────
+
+@app.get('/burst/status')
+def burst_status():
+    """
+    Camera Bridge health for the Connection Status HUD.
+    Returns FTP enabled flag + burst registry summary.
+    """
+    if not session.get('user'):
+        return jsonify({'error': 'not_authenticated'}), 401
+    enabled = bool(os.environ.get('BBP_FTP_PASS', ''))
+    with _burst_lock:
+        burst_count = len(_burst_registry)
+    return jsonify({
+        'bridgeEnabled': enabled,
+        'ftpPort':       int(os.environ.get('BBP_FTP_PORT', '2121')) if enabled else None,
+        'burstCount':    burst_count,
+    })
+
+
+# ── Burst list (WS polling fallback) ─────────────────────────────────────────
+
+@app.get('/burst/list')
+def burst_list():
+    if not session.get('user'):
+        return jsonify({'error': 'not_authenticated'}), 401
+    with _burst_lock:
+        bursts = [
+            {
+                'burstId':    bid,
+                'frameCount': len(b['frame_paths']),
+                'previewUrl': f'/burst/stream/{bid}/{bid}.webm',
+            }
+            for bid, b in _burst_registry.items()
+        ]
+    return jsonify({'bursts': bursts})
 
 
 @app.route('/', defaults={'path': ''})
@@ -437,9 +656,10 @@ def composite_score(sharpness: float, exposure: float,
 @app.get("/health")
 def health():
     return jsonify({
-        "status": "ok",
-        "model": "multi-metric-v1",
-        "metrics": ["sharpness", "exposure", "noise", "contrast"],
+        "status":        "ok",
+        "model":         "multi-metric-v1",
+        "metrics":       ["sharpness", "exposure", "noise", "contrast"],
+        "bridgeEnabled": bool(os.environ.get('BBP_FTP_PASS', '')),
     })
 
 

@@ -11,6 +11,9 @@ import ReviewExportView from './views/ReviewExportView';
 import { usePhotoLoader } from './hooks/usePhotoLoader';
 import { usePhotoRanker } from './hooks/usePhotoRanker';
 import { useSessionPersistence } from './hooks/useSessionPersistence';
+import { useCameraBridge } from './hooks/useCameraBridge';
+import BurstTray from './components/BurstTray';
+import FocusView from './views/FocusView';
 
 const HAS_DIR_PICKER = typeof window !== 'undefined' && 'showDirectoryPicker' in window;
 
@@ -44,6 +47,7 @@ function AppContent() {
     scoringStarted,
   } = usePhotoRanker(loadingComplete);
   useSessionPersistence(loadingComplete);
+  useCameraBridge();
 
   const currentView = location.pathname === '/'        ? 'landing'
     : location.pathname === '/cull'    ? 'culling'
@@ -55,10 +59,11 @@ function AppContent() {
   useEffect(() => {
     function onKey(e) {
       if (e.key === '?' || (e.shiftKey && e.key === '/')) { e.preventDefault(); setHelp(h => !h); }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') { e.preventDefault(); navigate('/focus'); }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [navigate]);
 
   const WEB_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp']);
   const IMG_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'raw', 'arw', 'cr2', 'cr3', 'nef', 'dng', 'orf', 'rw2', 'raf', 'tif', 'tiff']);
@@ -187,6 +192,7 @@ function AppContent() {
         onHelp={() => setHelp(true)}
         projectName={sourceDir?.name || null}
       />
+      <BurstTray />
       {authExpired && (
         <button
           type="button"
@@ -222,6 +228,7 @@ function AppContent() {
           <Route path="/cull"    element={hasPhotos ? <CullingView feedbackIntensity="pronounced" showInlineKbd onComplete={() => navigate('/review')} /> : <Navigate to="/" />} />
           <Route path="/compare" element={hasPhotos ? <CompareView /> : <Navigate to="/" />} />
           <Route path="/review"  element={hasPhotos ? <ReviewExportView /> : <Navigate to="/" />} />
+          <Route path="/focus"   element={<FocusView />} />
         </Routes>
         <HelpOverlay open={help} onClose={() => setHelp(false)} />
       </div>

@@ -28,8 +28,8 @@ This project is managed by BigBadAgentForce.
 
 ## Structure
 
-- `app.py` — Flask entry point, serves API + React static build
-- `backend/` — Python modules (ranking, image processing)
+- `app.py` — Flask entry point, serves API + React static build + WebSocket bridge
+- `backend/` — Python modules (ranking, image processing, ftp_ingest, burst_watcher)
 - `frontend/` — React/Vite SPA
   - `src/App.jsx` — shell: routing, photo loader, ranker, hidden file inputs (iOS), bottom nav
   - `src/components/GoogleGate.jsx` — auth gate (`/auth/config`, `/auth/me`, password / dev / open)
@@ -45,6 +45,10 @@ This project is managed by BigBadAgentForce.
 - `POST /analyze` — image ranking
 - `POST /rank` — ranking endpoint (requires authenticated session for API routes)
 - `GET /auth/config`, `GET /auth/me`, `POST /auth/password`, `POST /auth/google`, `POST /auth/logout`
+- `WS /bridge` — Camera Bridge WebSocket (frame_arrived, burst_ready)
+- `GET /bridge/status` — Current bridge state
+- `GET /bridge/bursts/<burst_id>` — Burst status
+- `POST /bridge/bursts/<burst_id>/hero` — Select burst hero
 
 ## Environment Variables
 
@@ -53,6 +57,7 @@ This project is managed by BigBadAgentForce.
 - `FLASK_SECRET_KEY` — **set in production (e.g. Railway)**; if unset, Flask generates a new key each process start and invalidates sessions on every deploy/restart
 - `BBP_ALLOWED_EMAILS` — comma-separated allowlist for Google OAuth (empty = all Google logins rejected)
 - `GOOGLE_CLIENT_ID` — server-side Google token verify (when using Google auth)
+- Camera Bridge envs: `BBP_FTP_PORT`, `BBP_FTP_USER`, `BBP_FTP_PASS`, `BBP_FTP_ROOT`, `BBP_PREVIEW_DIR`, `BBP_BURST_WINDOW_MS`, `BBP_BURST_MIN_FRAMES`, `BBP_FFMPEG_FPS`, `BBP_RESIZE_PX`, `BBP_BURST_MAX_AGE_SECONDS`
 
 ## Recently completed (2026-05)
 

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
+import { useStore } from '../store'
 
 const navItems = [
   { label: 'Library',    route: '/',        icon: 'grid_view' },
@@ -12,6 +13,8 @@ const navItems = [
 export default function Sidebar() {
   const navigate  = useNavigate()
   const location  = useLocation()
+  const bridgeEnabled = useStore(s => s.bridgeEnabled)
+  const liveFrameCount = useStore(s => s.liveFrames.length)
   const [health, setHealth] = useState(null) // null=loading, true=ok, false=error
 
   useEffect(() => {
@@ -103,6 +106,13 @@ export default function Sidebar() {
               {health === null ? 'CHECKING…' : health ? 'ONLINE' : 'OFFLINE'}
             </span>
           </span>
+          {bridgeEnabled && (
+            <span className="hidden lg:flex items-center gap-2" style={{ color: liveFrameCount > 0 ? '#00d1ff' : '#f4a261' }}>
+              <span className="inline-block w-1.5 h-1.5 rounded-full"
+                style={{ background: liveFrameCount > 0 ? '#00d1ff' : '#f4a261' }} />
+              {liveFrameCount > 0 ? 'CAMERA LIVE' : 'CAMERA IDLE'}
+            </span>
+          )}
         </div>
       </div>
     </aside>
