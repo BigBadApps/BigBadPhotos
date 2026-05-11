@@ -47,6 +47,7 @@ _camera_lock  = threading.Lock()
 
 def _broadcast(payload: dict):
     """Fan-out JSON to all authenticated WS clients. Prunes dead connections."""
+    global _ws_clients
     msg = json.dumps(payload)
     with _ws_lock:
         dead = set()
