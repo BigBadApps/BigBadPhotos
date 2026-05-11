@@ -33,8 +33,10 @@ This project is managed by BigBadAgentForce.
 - `frontend/` — React/Vite SPA
   - `src/App.jsx` — shell: routing, photo loader, ranker, hidden file inputs (iOS), bottom nav
   - `src/components/GoogleGate.jsx` — auth gate (`/auth/config`, `/auth/me`, password / dev / open)
-  - `src/hooks/usePhotoRanker.js` — batches to `/rank`, scoring progress in store, 401 → session-expired UX
+  - `src/hooks/usePhotoRanker.js` — manual `beginScoring` to `/rank`, progress + ETA in store, 401 → session-expired UX
   - `src/hooks/useExporter.js` — export (FSAPI + iOS share/downloads), `exportDone` only on success
+  - `src/views/LandingView.jsx` — source folder, hero preview, explicit scoring CTA, review gate after scoring
+  - `src/views/CullingView.jsx` — AI filters, bulk Keep/Maybe/Reject, metric sidebar (`*_score` from `/rank`)
   - `src/views/ReviewExportView.jsx` — Review + export UI
   - `frontend/tests/e2e.spec.js` — Playwright smoke
 - `requirements.txt` — Python deps
@@ -56,7 +58,9 @@ This project is managed by BigBadAgentForce.
 
 ## Recently completed (2026-05)
 
-- **PR #30** merged (`bbaf/bigbadphotos-merge-session-export-fixes`): merged redesign `main` with session/export/scoring fixes — `/rank` errors expose `error`/`detail` + `.status`, 401 does not mark backend offline, `isScoring` cleared in `finally`, `authSessionExpired` synced to store + cleared on sign-in, Landing scoring bar no longer shows false 100% when there are no scoreable images, export completion only after success, iOS `hasDestDir` treated as ready without FSAPI.
+- **PR #32** merged (`bbaf/bigbadphotos-ui-fixes-tweaks`, 2026-05-11): Landing separates folder load from AI scoring (`beginScoring`, ETA, **Begin Review** only after scoring completes or RAW-only with no scoreable images); hero shows a random preview from the loaded set. Culling maps `exposure_score` / `noise_score` / `composition_score`, adds burst-best and top-20% filters, bulk Keep/Maybe/Reject from thumbnail selection, and stacks the sidebar below the viewer on narrow viewports (no mobile hide). `.venv/` gitignored for local Python 3.12 venv.
+- **PR #31** merged (`bbaf/bigbadphotos-merge-session-export-fixes`): session/export/scoring fixes on redesign `main` (same scope as #30 below).
+- **PR #30** merged (`bbaf/bigbadphotos-merge-session-export-fixes`): `/rank` errors expose `error`/`detail` + `.status`, 401 does not mark backend offline, `isScoring` cleared in `finally`, `authSessionExpired` synced to store + cleared on sign-in, Landing scoring bar no longer shows false 100% when there are no scoreable images, export completion only after success, iOS `hasDestDir` treated as ready without FSAPI.
 
 ## Current Priorities
 

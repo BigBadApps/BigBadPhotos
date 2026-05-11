@@ -36,8 +36,10 @@ The combination of zustand 4.4.0 + React 19 + Vite 8 dev server may produce an E
 
 - `BBP_PORT` — backend port (use 8002 to match Vite proxy config)
 - `BBP_DEBUG=1` — enables Flask debug mode with hot-reload
+- `BBP_HOSTNAME` — bind address (use `0.0.0.0` or unset so `localhost:8002` works; a Tailscale-only bind breaks loopback)
 - `GOOGLE_CLIENT_ID` / `BBP_ALLOWED_EMAILS` — optional, for real Google auth
 - `FLASK_SECRET_KEY` — optional, auto-generated if unset
+- Local Python: `python3.12 -m venv .venv` + `pip install -r requirements.txt` (`.venv/` is gitignored)
 
 ### Node version
 
@@ -53,13 +55,15 @@ The frontend uses the "Obsidian Lens" design system (PR #12, merged). Key detail
 - Custom monoline SVG icons in `frontend/src/components/Icon.jsx` (no icon font)
 - Google Fonts: Manrope (sans) + JetBrains Mono (mono)
 
-### PR history (as of 2026-05-09)
+### PR history (as of 2026-05-11)
 
 | # | Branch | Status | Description |
 |---|--------|--------|-------------|
 | #12 | `claude/implement-index-html-e9khN` | Merged | Obsidian Lens design — core components + views |
 | #13 | `claude/design-remaining-e9khN` | Open | Obsidian Lens — remaining components (CompareView, ReviewExportView) |
 | #14 | `bbaf/bigbadphotos-fix-render-host-binding` | Open | Fix deploy timeout (bind `0.0.0.0`) |
+| #30–#31 | `bbaf/bigbadphotos-merge-session-export-fixes` | Merged | Session/export/scoring fixes on redesign `main` |
+| #32 | `bbaf/bigbadphotos-ui-fixes-tweaks` | Merged | Landing scoring gate + hero preview; culling metrics, filters, bulk actions, mobile sidebar |
 
 ### E2E testing (Playwright — proposed, not yet implemented)
 
