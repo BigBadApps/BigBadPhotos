@@ -13,6 +13,7 @@ import GoogleGate from './components/GoogleGate'
 function AppContent() {
   const sourceDir = useStore(state => state.sourceDir)
   const setCurrentRoute = useStore(state => state.setCurrentRoute)
+  const authSessionExpired = useStore(state => state.authSessionExpired)
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -28,6 +29,15 @@ function AppContent() {
     <div className="flex h-screen overflow-hidden bg-surface text-on-surface">
       <Sidebar />
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+        {authSessionExpired && (
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="shrink-0 w-full bg-error/90 text-on-error text-center py-2 px-4 text-[10px] font-bold tracking-widest uppercase hover:bg-error transition-colors"
+          >
+            Session expired · reload to sign in
+          </button>
+        )}
         <TopAppBar />
         <main className="flex-1 overflow-hidden">
           <Routes>

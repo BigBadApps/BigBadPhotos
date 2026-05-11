@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useStore } from '../store'
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
 
@@ -46,6 +47,7 @@ async function waitForBackend({ maxMs = 60000, intervalMs = 1500 } = {}) {
 }
 
 export default function GoogleGate({ children }) {
+  const setAuthSessionExpired = useStore(s => s.setAuthSessionExpired)
   // null = loading; false = not authenticated
   const [user, setUser] = useState(null)
   const [checking, setChecking] = useState(true)
@@ -65,12 +67,13 @@ export default function GoogleGate({ children }) {
 
       const data = await res.json().catch(() => ({}))
       if (res.ok) {
+        setAuthSessionExpired(false)
         setUser(data.user)
       } else if (res.status === 403) {
         setError('This Google account is not authorized.')
         setUser(false)
       } else {
-        setError(data.detail || 'Sign-in failed.')
+        setError(data.detail || data.error || 'Sign-in failed.')
         setUser(false)
       }
     } catch {
@@ -100,7 +103,10 @@ export default function GoogleGate({ children }) {
     fetch('/auth/me')
       .then(r => (r.ok ? r.json() : Promise.reject(new Error('not_authed'))))
       .then(data => {
-        if (!cancelled) setUser(data.user)
+        if (!cancelled) {
+          setAuthSessionExpired(false)
+          setUser(data.user)
+        }
       })
       .catch(() => {
         if (!cancelled) setUser(false)

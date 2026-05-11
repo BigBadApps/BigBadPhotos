@@ -277,6 +277,7 @@ export default function CullingView() {
   const { scoring, scoredCount, backendAvailable } = usePhotoRanker(loadingComplete)
   useSessionPersistence(loadingComplete)
 
+  const authSessionExpired = useStore(state => state.authSessionExpired)
   const photos = useStore(state => state.photos)
   const order = useStore(state => state.order)
   const currentId = useStore(state => state.currentId)
@@ -541,7 +542,17 @@ export default function CullingView() {
                 SCORING {scoredCount}/{totalCount}
               </span>
             )}
-            {!backendAvailable && (
+            {authSessionExpired && (
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="text-error tracking-widest hover:underline"
+                style={{ fontSize: '9px' }}
+              >
+                SESSION EXPIRED · RELOAD
+              </button>
+            )}
+            {!authSessionExpired && !backendAvailable && (
               <span className="text-error/60 tracking-widest" style={{ fontSize: '9px' }}>
                 BACKEND OFFLINE
               </span>

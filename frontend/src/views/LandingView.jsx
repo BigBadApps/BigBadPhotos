@@ -38,6 +38,7 @@ export default function LandingView() {
   const order        = useStore(s => s.order)
   const scoringProgress = useStore(s => s.scoringProgress)
   const isScoring    = useStore(s => s.isScoring)
+  const authSessionExpired = useStore(s => s.authSessionExpired)
 
   const [error, setError]         = useState(null)
   const [iosLoading, setIosLoading] = useState(false)
@@ -71,9 +72,13 @@ export default function LandingView() {
   const scoredCount = scoringProgress.done
   const scoreTotal  = scoringProgress.total
   const scorePct    = scoreTotal > 0 ? Math.round((scoredCount / scoreTotal) * 100) : 0
-  const scoringLabel = photoCount > 0
-    ? `${scoredCount.toLocaleString()} of ${photoCount.toLocaleString()} images`
-    : '0 of 0 images'
+  const scoringLabel = photoCount === 0
+    ? '0 of 0 images'
+    : scoreTotal > 0
+      ? `${scoredCount.toLocaleString()} of ${scoreTotal.toLocaleString()} scored`
+      : webCount === 0
+        ? 'RAW only — no web scores'
+        : 'Awaiting analysis'
 
   const sourceName = sourceDir
     ? (sourceDir._ios ? `${photoCount} photos loaded` : sourceDir.name)
@@ -259,6 +264,16 @@ export default function LandingView() {
           </span>
         </button>
 
+        {authSessionExpired && (
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="w-full bg-error/15 border border-error/40 text-error text-[10px] font-bold tracking-widest uppercase py-3 px-4"
+          >
+            Session expired · reload to sign in
+          </button>
+        )}
+
         {/* Stats */}
         <div className="flex justify-between items-start pt-2">
           <div className="space-y-1">
@@ -328,6 +343,16 @@ export default function LandingView() {
   const sharedControls = (
     <div className="flex flex-col gap-5">
 
+      {authSessionExpired && (
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="w-full bg-error/15 border border-error/40 text-error text-[10px] font-bold tracking-widest uppercase py-3 px-4 hover:bg-error/25 transition-colors text-center"
+        >
+          Session expired · reload to sign in
+        </button>
+      )}
+
       {/* Source card */}
       <button
         onClick={HAS_DIR_PICKER ? handleSourcePicker : () => fileInputRef.current?.click()}
@@ -378,7 +403,7 @@ export default function LandingView() {
         <div className="bg-surface-container-low p-4 space-y-1">
           <p className="text-[10px] text-secondary/40 font-bold uppercase tracking-widest">Scored</p>
           <p className="text-xl font-black text-on-surface">
-            {scoreTotal > 0 ? `${scorePct}%` : photoCount > 0 ? 'Ready' : '—'}
+            {scoreTotal > 0 ? `${scorePct}%` : photoCount > 0 ? (webCount > 0 ? '—' : 'RAW') : '—'}
           </p>
         </div>
       </div>
@@ -498,9 +523,19 @@ export default function LandingView() {
         />
         <StatCard
           label="SCORING_PROGRESS"
-          value={scoreTotal > 0 ? `${scorePct}%` : photoCount > 0 ? '100%' : '—'}
+          value={scoreTotal > 0 ? `${scorePct}%` : '—'}
           unit="SCORED"
-          sub={isScoring ? `${scoredCount} OF ${scoreTotal} ANALYZED` : photoCount > 0 ? 'ANALYSIS COMPLETE' : 'AWAITING SOURCE FOLDER'}
+          sub={
+            isScoring
+              ? `${scoredCount} OF ${scoreTotal} ANALYZED`
+              : photoCount === 0
+                ? 'AWAITING SOURCE FOLDER'
+                : scoreTotal > 0 && scoredCount >= scoreTotal
+                  ? 'ANALYSIS COMPLETE'
+                  : webCount === 0
+                    ? 'RAW ONLY — NO WEB SCORES'
+                    : 'AWAITING ANALYSIS'
+          }
           subColor={isScoring ? 'text-primary' : 'text-on-surface-variant/40'}
         />
         <StatCard

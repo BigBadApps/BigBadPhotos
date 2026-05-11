@@ -8,6 +8,9 @@ export function usePhotoRanker(loadingComplete) {
   const photos = useStore(state => state.photos)
   const order = useStore(state => state.order)
   const batchUpdateScores = useStore(state => state.batchUpdateScores)
+  const setScoringProgress = useStore(state => state.setScoringProgress)
+  const setIsScoring = useStore(state => state.setIsScoring)
+  const setAuthSessionExpired = useStore(state => state.setAuthSessionExpired)
 
   const [scoring, setScoring] = useState(false)
   const [scoredCount, setScoredCount] = useState(0)
@@ -34,6 +37,8 @@ export function usePhotoRanker(loadingComplete) {
       setScoring(true)
       setScoreError(null)
       setScoredCount(0)
+      setIsScoring(true)
+      setScoringProgress(0, scoreable.length)
 
       try {
         for (let i = 0; i < scoreable.length; i += RANK_BATCH_SIZE) {
@@ -45,16 +50,23 @@ export function usePhotoRanker(loadingComplete) {
           if (cancelled) break
 
           batchUpdateScores(results)
-          setScoredCount(i + batch.length)
+          const done = i + batch.length
+          setScoredCount(done)
+          setScoringProgress(done, scoreable.length)
         }
       } catch (err) {
         if (!cancelled) {
-          // Backend may not be running — fail silently, just mark unavailable
           setScoreError(err.message)
-          setBackendAvailable(false)
+          if (err.status === 401) {
+            setAuthSessionExpired(true)
+            setBackendAvailable(true)
+          } else {
+            setBackendAvailable(false)
+          }
         }
       } finally {
-        if (!cancelled) setScoring(false)
+        setScoring(false)
+        setIsScoring(false)
       }
     }
 

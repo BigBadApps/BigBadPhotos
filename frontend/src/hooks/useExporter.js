@@ -67,6 +67,7 @@ export function useExporter() {
     setExportTotal(queue.length)
 
     const failed = []
+    let completedOk = false
     const keeps = Object.values(photos).filter(p => p.decision === 'keep').map(p => p.filename)
     const maybes = Object.values(photos).filter(p => p.decision === 'maybe').map(p => p.filename)
     const rejects = Object.values(photos).filter(p => p.decision === 'reject').map(p => p.filename)
@@ -84,86 +85,84 @@ export function useExporter() {
       decisions,
     }
 
-    if (!HAS_DIR_PICKER) {
-      // iOS path: try Web Share API first, fall back to sequential downloads
-      try {
-        const files = await Promise.all(queue.map(async (photo) => {
-          const blob = fileFormat === 'jpg' && !photo.isRaw
-            ? await encodeAsJpeg(photo.file)
-            : photo.file
-          const name = fileFormat === 'jpg' && !photo.isRaw
-            ? photo.filename.replace(/\.[^.]+$/, '.jpg')
-            : photo.filename
-          return new File([blob], name, { type: blob.type || 'image/jpeg' })
-        }))
+    try {
+      if (!HAS_DIR_PICKER) {
+        try {
+          const files = await Promise.all(queue.map(async (photo) => {
+            const blob = fileFormat === 'jpg' && !photo.isRaw
+              ? await encodeAsJpeg(photo.file)
+              : photo.file
+            const name = fileFormat === 'jpg' && !photo.isRaw
+              ? photo.filename.replace(/\.[^.]+$/, '.jpg')
+              : photo.filename
+            return new File([blob], name, { type: blob.type || 'image/jpeg' })
+          }))
 
-        if (navigator.canShare && navigator.canShare({ files })) {
-          await navigator.share({ files, title: 'BigBadPhotos Export' })
-          setExportedCount(queue.length)
-        } else {
-          // Fallback: trigger individual downloads
-          for (let i = 0; i < files.length; i++) {
-            await triggerDownload(files[i], files[i].name)
+          if (navigator.canShare && navigator.canShare({ files })) {
+            await navigator.share({ files, title: 'BigBadPhotos Export' })
+            setExportedCount(queue.length)
+          } else {
+            for (let i = 0; i < files.length; i++) {
+              await triggerDownload(files[i], files[i].name)
+              setExportedCount(i + 1)
+            }
+          }
+
+          await triggerDownload(
+            new Blob([JSON.stringify(decisionsPayload, null, 2)], { type: 'application/json' }),
+            'bigbad_decisions.json'
+          )
+          completedOk = true
+        } catch (err) {
+          if (err.name !== 'AbortError') {
+            setExportError(`Export failed: ${err.message}`)
+          }
+        }
+      } else {
+        let exportDir = destDir
+        if (newFolderName.trim()) {
+          try {
+            exportDir = await destDir.getDirectoryHandle(newFolderName.trim(), { create: true })
+          } catch (err) {
+            setExportError(`Could not create folder "${newFolderName.trim()}": ${err.message}`)
+            return
+          }
+        }
+
+        for (let i = 0; i < queue.length; i++) {
+          const photo = queue[i]
+          try {
+            const convertToJpeg = fileFormat === 'jpg' && !photo.isRaw
+            const exportName = convertToJpeg
+              ? photo.filename.replace(/\.[^.]+$/, '.jpg')
+              : photo.filename
+            const blob = convertToJpeg ? await encodeAsJpeg(photo.file) : photo.file
+            const fileHandle = await exportDir.getFileHandle(exportName, { create: true })
+            const writable = await fileHandle.createWritable()
+            await writable.write(blob)
+            await writable.close()
+            setExportedCount(i + 1)
+          } catch (err) {
+            failed.push({ filename: photo.filename, reason: err.message })
             setExportedCount(i + 1)
           }
         }
 
-        // Also export the decisions JSON for downstream automation.
-        await triggerDownload(
-          new Blob([JSON.stringify(decisionsPayload, null, 2)], { type: 'application/json' }),
-          'bigbad_decisions.json'
-        )
-      } catch (err) {
-        if (err.name !== 'AbortError') {
-          setExportError(`Export failed: ${err.message}`)
-        }
-      }
-    } else {
-      // Desktop path: write to chosen destination folder (or a new subfolder)
-      let exportDir = destDir
-      if (newFolderName.trim()) {
         try {
-          exportDir = await destDir.getDirectoryHandle(newFolderName.trim(), { create: true })
-        } catch (err) {
-          setExportError(`Could not create folder "${newFolderName.trim()}": ${err.message}`)
-          setExporting(false)
-          return
-        }
-      }
-
-      for (let i = 0; i < queue.length; i++) {
-        const photo = queue[i]
-        try {
-          const convertToJpeg = fileFormat === 'jpg' && !photo.isRaw
-          const exportName = convertToJpeg
-            ? photo.filename.replace(/\.[^.]+$/, '.jpg')
-            : photo.filename
-          const blob = convertToJpeg ? await encodeAsJpeg(photo.file) : photo.file
-          const fileHandle = await exportDir.getFileHandle(exportName, { create: true })
+          const fileHandle = await exportDir.getFileHandle('bigbad_decisions.json', { create: true })
           const writable = await fileHandle.createWritable()
-          await writable.write(blob)
+          await writable.write(new Blob([JSON.stringify(decisionsPayload, null, 2)], { type: 'application/json' }))
           await writable.close()
-          setExportedCount(i + 1)
         } catch (err) {
-          failed.push({ filename: photo.filename, reason: err.message })
-          setExportedCount(i + 1)
+          failed.push({ filename: 'bigbad_decisions.json', reason: err.message })
         }
+        completedOk = true
       }
-
-      // Write decisions JSON into export folder so BigBadPhotoAutomation can resume.
-      try {
-        const fileHandle = await exportDir.getFileHandle('bigbad_decisions.json', { create: true })
-        const writable = await fileHandle.createWritable()
-        await writable.write(new Blob([JSON.stringify(decisionsPayload, null, 2)], { type: 'application/json' }))
-        await writable.close()
-      } catch (err) {
-        failed.push({ filename: 'bigbad_decisions.json', reason: err.message })
-      }
+    } finally {
+      setFailedFiles(failed)
+      setExporting(false)
+      if (completedOk) setExportDone(true)
     }
-
-    setFailedFiles(failed)
-    setExporting(false)
-    setExportDone(true)
   }, [photos, destDir])
 
   const reset = useCallback(() => {
@@ -183,6 +182,6 @@ export function useExporter() {
     failedFiles,
     startExport,
     reset,
-    hasDestDir: !!destDir,
+    hasDestDir: HAS_DIR_PICKER ? !!destDir : true,
   }
 }
