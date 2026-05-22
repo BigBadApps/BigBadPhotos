@@ -47,14 +47,22 @@ function AuthGate({ onAuthed, authConfig }) {
         setTimeout(() => onAuthed(), 500);
       } else {
         setState('error');
+        setPassword('');
         setHint(
           data.error === 'invalid_password'
             ? 'Incorrect password. Try again.'
             : 'Authentication failed — check server configuration.',
         );
+        // Shake the card by briefly adding a class — removed after animation
+        const card = document.querySelector('.auth-card');
+        if (card) {
+          card.classList.add('bbp-shake');
+          setTimeout(() => card.classList.remove('bbp-shake'), 400);
+        }
       }
     } catch {
       setState('error');
+      setPassword('');
       setHint('Could not reach the server. Is it running?');
     }
   }
@@ -117,7 +125,7 @@ function AuthGate({ onAuthed, authConfig }) {
         </div>
 
         {/* Card */}
-        <div className="card card-elevated" style={{ width: '100%', padding: 'var(--sp-7)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-5)' }}>
+        <div className="card card-elevated auth-card" style={{ width: '100%', padding: 'var(--sp-7)', display: 'flex', flexDirection: 'column', gap: 'var(--sp-5)' }}>
           <div className="flex aic gap-3">
             <div style={{ width: 32, height: 32, borderRadius: 8, display: 'grid', placeItems: 'center', background: 'var(--bg-3)', border: '1px solid var(--line)' }}>
               <Icon name="lock" size={16} />
@@ -284,8 +292,8 @@ export default function GoogleGate({ children }) {
 
   useEffect(() => {
     Promise.all([
-      fetch('/auth/me').then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch('/auth/config').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('/auth/me', { credentials: 'include' }).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('/auth/config', { credentials: 'include' }).then(r => r.ok ? r.json() : null).catch(() => null),
     ]).then(([meData, configData]) => {
       if (configData) setAuthConfig(configData);
       if (meData?.authenticated || configData?.open) {

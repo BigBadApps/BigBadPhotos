@@ -20,6 +20,8 @@ import {
   requestDriveAccessFromGesture,
   resumeDriveRedirectIfNeeded,
 } from './utils/googleDrive';
+import { useAutonomousMode } from './hooks/useAutonomousMode';
+import AutonomousPanel       from './components/AutonomousPanel';
 
 const HAS_DIR_PICKER = typeof window !== 'undefined' && 'showDirectoryPicker' in window;
 
@@ -27,6 +29,8 @@ function AppContent() {
   const navigate = useNavigate();
   const location = useLocation();
   const [help, setHelp] = useState(false);
+  const handleCloseHelp = useCallback(() => setHelp(false), []);
+  const [toast, setToast] = useState(null);
   const [drivePicker, setDrivePicker] = useState(null);
   const [driveError, setDriveError] = useState(null);
   const [driveConnecting, setDriveConnecting] = useState(false);
@@ -48,6 +52,7 @@ function AppContent() {
   const exportInputRef = useRef(null);
   const photos       = useStore(state => state.photos);
   const order        = useStore(state => state.order);
+  const hasPhotos    = order.length > 0;
   const { loading: photoLoading, loadingComplete, loadedCount, totalCount, loadError } = usePhotoLoader();
   const {
     scoring,
@@ -62,6 +67,26 @@ function AppContent() {
   } = usePhotoRanker(loadingComplete);
   useSessionPersistence(loadingComplete);
 
+  const [autoThreshold, setAutoThreshold] = useState(() => {
+    try {
+      const v = parseFloat(localStorage.getItem('bbp_auto_threshold'))
+      if (!Number.isFinite(v)) return 0.65
+      return Math.min(0.95, Math.max(0, v))
+    } catch { return 0.65 }
+  })
+
+  const handleThresholdChange = useCallback((val) => {
+    const clamped = Math.min(0.95, Math.max(0, val))
+    setAutoThreshold(clamped)
+    try { localStorage.setItem('bbp_auto_threshold', String(clamped)) } catch {}
+  }, [])
+
+  const autonomousMode = useAutonomousMode({
+    sourceDir,
+    destDir,
+    threshold: autoThreshold,
+  })
+
   const currentView = location.pathname === '/'        ? 'landing'
     : location.pathname === '/cull'    ? 'culling'
     : location.pathname === '/compare' ? 'compare'
@@ -70,12 +95,53 @@ function AppContent() {
   const stepMap = { landing: 2, culling: 3, compare: 4, export: 5 };
 
   useEffect(() => {
+    let toastTimer;
+    if (toast) {
+      toastTimer = setTimeout(() => setToast(null), 2500);
+    }
+    return () => clearTimeout(toastTimer);
+  }, [toast]);
+
+  useEffect(() => {
     function onKey(e) {
-      if (e.key === '?' || (e.shiftKey && e.key === '/')) { e.preventDefault(); setHelp(h => !h); }
+      if (e.repeat) return;
+      if (e.target?.tagName === 'INPUT' || e.target?.tagName === 'TEXTAREA') return;
+      const k = e.key;
+      if ((k === '?' || (e.shiftKey && k === '/')) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        setHelp(h => !h);
+        return;
+      }
+      if (k === 'Escape' && help && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        setHelp(false);
+        return;
+      }
+      if (k === '1' && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); navigate('/'); return; }
+      if (k === '2' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        if (!hasPhotos) { setToast({ message: 'Select a source folder first', at: Date.now() }); return; }
+        navigate('/cull');
+        return;
+      }
+      if (k === '3' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        if (!hasPhotos) { setToast({ message: 'Select a source folder first', at: Date.now() }); return; }
+        navigate('/compare');
+        return;
+      }
+      if (k === '4' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        if (!hasPhotos) { setToast({ message: 'Select a source folder first', at: Date.now() }); return; }
+        navigate('/review');
+        return;
+      }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [navigate]);
+  }, [navigate, hasPhotos, help]);
 
   useEffect(() => {
     let cancelled = false;
@@ -242,7 +308,6 @@ function AppContent() {
     dev: authDev,
   };
 
-  const hasPhotos = order.length > 0;
   const reviewReady =
     !!sourceDir &&
     (!!destDir?.name || destDir?._drive || !HAS_DIR_PICKER) &&
@@ -255,7 +320,7 @@ function AppContent() {
     setDriveError(null);
     setDriveConnectLabel(target === 'export' ? 'export folder' : 'source folder');
 
-    if (target === 'source' && driveSessionReady.current) {
+    if (driveSessionReady.current) {
       setDrivePicker(target);
       return;
     }
@@ -341,6 +406,30 @@ function AppContent() {
           Session expired · reload to sign in
         </button>
       )}
+      {toast && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'fixed',
+            bottom: 80,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 70,
+            padding: '10px 18px',
+            borderRadius: 10,
+            background: 'var(--bg-2)',
+            border: '1px solid var(--line)',
+            boxShadow: 'var(--shadow-2)',
+            fontSize: 'var(--fs-xs)',
+            color: 'var(--fg)',
+            animation: 'bbp-fade-in .25s var(--ease-out)',
+            pointerEvents: 'none',
+          }}
+        >
+          {toast.message}
+        </div>
+      )}
       <div style={{ flex: 1, position: 'relative', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <Routes>
           <Route path="/" element={
@@ -353,6 +442,9 @@ function AppContent() {
               onBeginScoring={beginScoring}
               onBegin={() => navigate('/cull')}
               reviewReady={reviewReady}
+              autonomousMode={autonomousMode}
+              autoThreshold={autoThreshold}
+              onThresholdChange={handleThresholdChange}
             />
           } />
           <Route path="/cull"    element={hasPhotos ? <CullingView feedbackIntensity="pronounced" showInlineKbd onComplete={() => navigate('/review')} /> : <Navigate to="/" />} />
@@ -390,7 +482,7 @@ function AppContent() {
           onClose={() => setDrivePicker(null)}
           onSelect={handleDriveFolderSelect}
         />
-        <HelpOverlay open={help} onClose={() => setHelp(false)} />
+        <HelpOverlay open={help} onClose={handleCloseHelp} />
       </div>
 
       <nav style={{
@@ -399,25 +491,31 @@ function AppContent() {
         background: 'color-mix(in oklab, var(--bg-2) 85%, transparent)',
         backdropFilter: 'blur(12px)', border: '1px solid var(--line)',
         borderRadius: 999, zIndex: 40, boxShadow: 'var(--shadow-2)',
-      }}>
-        {[
-          ['/', 'Landing'],
-          ['/cull', 'Culling'],
-          ['/compare', 'Compare'],
-          ['/review', 'Export'],
-        ].map(([path, label]) => (
-          <button
-            key={path}
-            onClick={() => navigate(path)}
-            className="mono fs-xxs upper"
-            style={{
-              padding: '8px 14px', borderRadius: 999,
-              background: location.pathname === path ? 'var(--accent-soft)' : 'transparent',
-              color: location.pathname === path ? 'var(--accent)' : 'var(--fg-3)',
-              transition: 'all .15s',
-            }}
-          >{label}</button>
-        ))}
+      }}>          {[
+          ['/', 'Landing', false],
+          ['/cull', 'Culling', true],
+          ['/compare', 'Compare', true],
+          ['/review', 'Export', true],
+        ].map(([path, label, needsPhotos]) => {
+          const disabled = needsPhotos && !hasPhotos;
+          return (
+            <button
+              key={path}
+              onClick={() => navigate(path)}
+              disabled={disabled}
+              title={disabled ? 'Select a source folder first' : undefined}
+              className="mono fs-xxs upper"
+              style={{
+                padding: '8px 14px', borderRadius: 999,
+                background: location.pathname === path ? 'var(--accent-soft)' : 'transparent',
+                color: location.pathname === path ? 'var(--accent)' : disabled ? 'var(--fg-4)' : 'var(--fg-3)',
+                opacity: disabled ? 0.45 : 1,
+                cursor: disabled ? 'not-allowed' : 'pointer',
+                transition: 'all .15s',
+              }}
+            >{label}</button>
+          );
+        })}
       </nav>
     </div>
   );

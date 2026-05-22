@@ -3,6 +3,7 @@ import { useStore } from '../store'
 import { createDisplayUrl } from '../utils/imageResize'
 import { runWithConcurrency } from '../utils/displayUrlQueue'
 import { browseDrive, downloadDriveFile } from '../utils/googleDrive'
+import { SIDECAR_SUFFIX, sidecarFileName, sidecarToRankRow } from '../utils/bbpSidecar'
 
 const WEB_FORMATS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp'])
 const RAW_FORMATS = new Set(['raw', 'arw', 'cr2', 'cr3', 'nef', 'dng', 'orf', 'rw2', 'raf', 'tif', 'tiff'])
@@ -116,6 +117,31 @@ async function buildDrivePhoto(item, displayQueue, objectUrls) {
   }
 }
 
+async function tryReadLocalSidecarRow(dirHandle, imageFileName) {
+  try {
+    const sh = await dirHandle.getFileHandle(sidecarFileName(imageFileName))
+    const sf = await sh.getFile()
+    const parsed = JSON.parse(await sf.text())
+    return sidecarToRankRow(parsed, imageFileName)
+  } catch {
+    return null
+  }
+}
+
+async function buildDrivePhotoWithSidecar(item, displayQueue, objectUrls, sidecarMetaByImage) {
+  const photo = await buildDrivePhoto(item, displayQueue, objectUrls)
+  const sm = sidecarMetaByImage?.get(item.name)
+  if (!sm) return { photo, sidecarRow: null }
+  try {
+    const sf = await downloadDriveFile(sm.id, { name: sm.name, mimeType: sm.mimeType })
+    const text = await sf.text()
+    const row = sidecarToRankRow(JSON.parse(text), photo.id)
+    return { photo, sidecarRow: row }
+  } catch {
+    return { photo, sidecarRow: null }
+  }
+}
+
 export function usePhotoLoader() {
   const sourceDir = useStore(state => state.sourceDir)
   const addPhotos = useStore(state => state.addPhotos)
@@ -158,26 +184,46 @@ export function usePhotoLoader() {
         let firstBatch = true
 
         try {
-          const listing = await browseDrive(sourceDir.folderId, 'images')
-          const files = (listing.items || []).slice().sort((a, b) => a.name.localeCompare(b.name))
+          const listing = await browseDrive(sourceDir.folderId, 'all')
+          const allItems = listing.items || []
+          const sidecarMetaByImage = new Map()
+          const files = []
+          for (const it of allItems) {
+            const n = it.name
+            if (n.endsWith(SIDECAR_SUFFIX)) {
+              sidecarMetaByImage.set(n.slice(0, -SIDECAR_SUFFIX.length), it)
+              continue
+            }
+            const ext = n.split('.').pop().toLowerCase()
+            if (WEB_FORMATS.has(ext) || RAW_FORMATS.has(ext)) files.push(it)
+          }
+          files.sort((a, b) => a.name.localeCompare(b.name))
           if (cancelled) return
           setTotalCount(files.length)
 
           for (let i = 0; i < files.length; i += INGEST_BATCH_SIZE) {
             if (cancelled) break
             const slice = files.slice(i, i + INGEST_BATCH_SIZE)
-            const photos = new Array(slice.length)
+            const packed = new Array(slice.length)
 
             await runWithConcurrency(
               slice.map((item, index) => ({ item, index })),
               DRIVE_DOWNLOAD_CONCURRENCY,
               async ({ item, index }) => {
-                photos[index] = await buildDrivePhoto(item, display.displayQueue, objectUrls)
+                packed[index] = await buildDrivePhotoWithSidecar(
+                  item,
+                  display.displayQueue,
+                  objectUrls,
+                  sidecarMetaByImage,
+                )
               },
             )
 
             if (cancelled) break
+            const photos = packed.map((p) => p.photo)
             addPhotos(photos)
+            const scoreRows = packed.map((p) => p.sidecarRow).filter(Boolean)
+            if (scoreRows.length) useStore.getState().batchUpdateScores(scoreRows)
             setLoadedCount(i + photos.length)
             if (firstBatch && photos.length > 0) {
               setCurrentId(photos[0].id)
@@ -249,6 +295,8 @@ export function usePhotoLoader() {
                 display.displayQueue.push({ id: file.name, file, previewUrl: url })
               }
 
+              const sidecarRow = await tryReadLocalSidecarRow(sourceDir, file.name)
+
               return {
                 id: file.name,
                 filename: file.name,
@@ -259,13 +307,18 @@ export function usePhotoLoader() {
                 decision: null,
                 rank: null,
                 sharpness: null,
+                _sidecarRow: sidecarRow,
               }
             }),
           )
 
           if (cancelled) break
 
-          addPhotos(photos)
+          const scoreRows = photos.map((p) => p._sidecarRow).filter(Boolean)
+          const clean = photos.map(({ _sidecarRow, ...rest }) => rest)
+          addPhotos(clean)
+          if (scoreRows.length) useStore.getState().batchUpdateScores(scoreRows)
+
           setLoadedCount(i + photos.length)
 
           if (firstBatch && photos.length > 0) {

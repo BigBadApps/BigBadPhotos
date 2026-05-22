@@ -64,6 +64,7 @@ function ExportProgress({ onExport, onReset, exporting, exportDone, exportedCoun
 
 export default function ReviewExportView() {
   const photos = useStore(state => state.photos)
+  const order = useStore(state => state.order)
   const destDir = useStore(state => state.destDir)
   const setDestDir = useStore(state => state.setDestDir)
   const isScoring = useStore(state => state.isScoring)
@@ -83,6 +84,17 @@ export default function ReviewExportView() {
   const maybes = Object.values(photos).filter(p => p.decision === 'maybe')
   const rejects = Object.values(photos).filter(p => p.decision === 'reject')
   const total = Object.keys(photos).length
+
+  if (order.length === 0) {
+    return (
+      <div className="view" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ textAlign: 'center', color: 'var(--fg-3)' }}>
+          <Icon name="image" size={48} stroke={1.2} />
+          <p className="fs-sm" style={{ marginTop: 12 }}>No photos loaded. Go back and select a source folder.</p>
+        </div>
+      </div>
+    );
+  }
   const exportQueue = includeMaybes ? keeps.length + maybes.length : keeps.length
 
   const handlePickDest = async () => {

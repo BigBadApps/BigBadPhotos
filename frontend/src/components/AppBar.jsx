@@ -26,7 +26,7 @@ export default function AppBar({ view, step, totalSteps, onHelp, projectName }) 
         </div>
       )}
       {step != null && (
-        <div className="step">
+        <div className="step" title={`Workflow step ${step} of ${totalSteps}: ${viewLabels[view] || view}`}>
           <span>{String(step).padStart(2, '0')}/{String(totalSteps).padStart(2, '0')}</span>
           <span style={{ display: 'inline-flex', gap: 4, marginLeft: 4 }}>
             {Array.from({ length: totalSteps }).map((_, i) => (

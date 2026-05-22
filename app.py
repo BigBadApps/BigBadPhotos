@@ -6,6 +6,7 @@ import os
 import time
 import gc
 import secrets
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from typing import Dict, List, Tuple
 from backend import google_drive
@@ -240,6 +241,8 @@ def drive_browse():
     try:
         if mode == 'images':
             files = google_drive.list_images(_drive_token(), parent_id)
+        elif mode == 'all':
+            files = google_drive.list_all(_drive_token(), parent_id)
         else:
             files = google_drive.list_folders(_drive_token(), parent_id)
     except Exception as exc:
@@ -316,23 +319,24 @@ EYE_CASCADE  = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xm
 # Image decoding
 # ---------------------------------------------------------------------------
 
-MAX_SCORING_DIM = 1500  # px — sufficient for all scoring metrics
+MAX_SCORING_DIM = 1000  # px — sufficient for all scoring metrics, optimized for speed
 
-def decode_image(img_bytes: bytes) -> Tuple[np.ndarray, np.ndarray]:
+def decode_image(img_bytes: bytes) -> np.ndarray:
     """
-    Decode JPEG/PNG bytes → (BGR, grayscale), capped at MAX_SCORING_DIM.
+    Decode JPEG/PNG bytes → grayscale, capped at MAX_SCORING_DIM.
     Raises ValueError if decode fails.
     """
+    if not img_bytes or len(img_bytes) < 32:
+        raise ValueError(f"empty or truncated upload ({len(img_bytes) if img_bytes else 0} bytes)")
     arr = np.frombuffer(img_bytes, dtype=np.uint8)
-    bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if bgr is None:
+    gray = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+    if gray is None:
         raise ValueError("cv2.imdecode returned None — not a valid image")
-    h, w = bgr.shape[:2]
+    h, w = gray.shape[:2]
     if max(h, w) > MAX_SCORING_DIM:
         scale = MAX_SCORING_DIM / max(h, w)
-        bgr = cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    return bgr, gray
+        gray = cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    return gray
 
 
 # ---------------------------------------------------------------------------
@@ -593,7 +597,7 @@ def analyze():
         filename = file_obj.filename or "unknown"
 
         img_bytes = file_obj.read()
-        _, gray = decode_image(img_bytes)
+        gray = decode_image(img_bytes)
 
         sharp_raw  = score_sharpness(gray)
         exposure   = score_exposure(gray)
@@ -644,9 +648,8 @@ def rank():
             return jsonify({"error": "payload_too_large",
                             "detail": f"batch size {len(manifest)} exceeds 200"}), 413
 
-        # ---- Decode + score every image ----
-        raw_results: List[dict] = []
-
+        # ---- Read all files into memory first ----
+        tasks = []
         for entry in manifest:
             entry_id = entry.get("id")
             filename = entry.get("filename", "unknown")
@@ -661,16 +664,21 @@ def rank():
                                 "detail": f"missing file part for id '{entry_id}'",
                                 "missing_id": entry_id}), 400
 
-            try:
-                file_obj.seek(0)
-                img_bytes = file_obj.read()
-                _, gray   = decode_image(img_bytes)
-                del img_bytes
+            file_obj.seek(0)
+            img_bytes = file_obj.read()
+            tasks.append((entry_id, filename, img_bytes))
 
+        # ---- Decode + score concurrently ----
+        raw_results: List[dict] = []
+
+        def process_image(task):
+            t_id, t_filename, t_bytes = task
+            try:
+                gray = decode_image(t_bytes)
                 subj = score_faces(gray)
-                raw_results.append({
-                    "id":           entry_id,
-                    "filename":     filename,
+                res = {
+                    "id":           t_id,
+                    "filename":     t_filename,
                     "sharpness_raw": score_sharpness(gray),
                     "exposure":     score_exposure(gray),
                     "noise":        score_noise(gray),
@@ -678,16 +686,48 @@ def rank():
                     "subject":      subj,
                     "composition":  score_composition(gray, subj.get("primary_face_box")),
                     "phash":        compute_phash(gray),
-                })
+                }
+                # Explicit cleanup
                 del gray
-                gc.collect()
-            except Exception as e:
-                return jsonify({"error": "scoring_failed", "id": entry_id,
-                                "filename": filename, "detail": str(e)}), 500
+                return res
+            except Exception as exc:
+                return {"error": str(exc), "id": t_id, "filename": t_filename}
+
+        ranking_errors: List[dict] = []
+
+        # OpenCV releases GIL, so multithreading scales well.
+        workers = min(32, (os.cpu_count() or 4) * 2)
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            for result in executor.map(process_image, tasks):
+                if "error" in result:
+                    ranking_errors.append({
+                        "id":       result["id"],
+                        "filename": result["filename"],
+                        "detail":   result["error"],
+                    })
+                else:
+                    raw_results.append(result)
+
+        gc.collect()
 
         if not raw_results:
-            return jsonify({"results": [], "model": "multi-metric-v1",
-                            "duration_ms": int((time.perf_counter() - start) * 1000)})
+            if ranking_errors:
+                first = ranking_errors[0]
+                return jsonify({
+                    "error":          "all_scoring_failed",
+                    "detail":         first["detail"],
+                    "id":             first["id"],
+                    "filename":       first["filename"],
+                    "ranking_errors": ranking_errors,
+                    "model":          "multi-metric-v1",
+                    "duration_ms":    int((time.perf_counter() - start) * 1000),
+                }), 422
+            return jsonify({
+                "results":          [],
+                "ranking_errors":   [],
+                "model":            "multi-metric-v1",
+                "duration_ms":      int((time.perf_counter() - start) * 1000),
+            })
 
         # ---- Normalise sharpness across the batch (p99) ----
         sharp_vals = np.array([r["sharpness_raw"] for r in raw_results])
@@ -750,16 +790,21 @@ def rank():
         for i, item in enumerate(results, 1):
             item["rank"] = i
             bg = item["burst_group"]
-            if bg is not None and bg not in seen_burst_groups:
+            if bg is None:
+                # Single-image "group" — not a burst; always eligible for export filters
+                item["is_burst_best"] = True
+            elif bg not in seen_burst_groups:
+                # First (highest score) seen for this burst group
                 item["is_burst_best"] = True
                 seen_burst_groups.add(bg)
             else:
                 item["is_burst_best"] = False
 
         return jsonify({
-            "results":     results,
-            "model":       "multi-metric-v1",
-            "duration_ms": int((time.perf_counter() - start) * 1000),
+            "results":          results,
+            "ranking_errors":   ranking_errors,
+            "model":            "multi-metric-v1",
+            "duration_ms":      int((time.perf_counter() - start) * 1000),
         })
 
     except Exception as e:

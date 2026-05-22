@@ -2,12 +2,16 @@ import { test, expect } from '@playwright/test'
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-/** Click "Continue (Dev Mode)" and wait for landing view. Requires BBP_DEBUG=1. */
+/** Create a dev session and wait for landing view. Requires BBP_DEBUG=1. */
 async function bypassAuth(page) {
   await page.goto('/')
   await expect(page.locator('h1', { hasText: 'BigBadPhotos' })).toBeVisible({ timeout: 10_000 })
-  await page.locator('text=Continue (Dev Mode)').click()
-  await expect(page.locator('text=Choose your shoot')).toBeVisible({ timeout: 5_000 })
+  await page.evaluate(async () => {
+    const res = await fetch('/auth/dev', { method: 'POST', credentials: 'include' })
+    if (!res.ok) throw new Error(`dev auth failed: ${res.status}`)
+  })
+  await page.reload()
+  await expect(page.locator('.meta', { hasText: 'Session folders' })).toBeVisible({ timeout: 10_000 })
 }
 
 /**
@@ -66,7 +70,7 @@ test('auth gate renders sign-in screen', async ({ page }) => {
 
 test('dev mode: Continue (Dev Mode) reaches landing', async ({ page }) => {
   await bypassAuth(page)
-  await expect(page.locator('text=Choose your shoot')).toBeVisible()
+  await expect(page.locator('.meta', { hasText: 'Session folders' })).toBeVisible()
 })
 
 // ── Landing view ──────────────────────────────────────────────────────────
@@ -101,6 +105,57 @@ test('Escape closes help overlay', async ({ page }) => {
   await expect(page.locator('text=Keyboard Shortcuts')).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.locator('text=Keyboard Shortcuts')).not.toBeVisible()
+  await expect(page.locator('.meta', { hasText: 'Session folders' })).toBeVisible()
+})
+
+test('shortcuts 2/3/4 without source show toast and stay on landing', async ({ page }) => {
+  await bypassAuth(page)
+  await page.locator('body').click()
+  for (const key of ['2', '3', '4']) {
+    await page.keyboard.press(key)
+    await expect(page.getByRole('status')).toContainText('Select a source folder first', { timeout: 3_000 })
+    await expect(page.locator('.meta', { hasText: 'Session folders' })).toBeVisible()
+    await page.getByRole('status').waitFor({ state: 'detached', timeout: 4_000 }).catch(() => {})
+  }
+})
+
+test('nav buttons disabled without source folder', async ({ page }) => {
+  await bypassAuth(page)
+  for (const label of ['Culling', 'Compare', 'Export']) {
+    const btn = page.locator('nav button', { hasText: label })
+    await expect(btn).toBeDisabled()
+    await expect(btn).toHaveAttribute('title', 'Select a source folder first')
+  }
+})
+
+test('password error clears field, shows hint, and shakes card', async ({ page }) => {
+  await page.route('**/auth/config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ password: true, dev: false, google: false, drive: false }),
+    })
+  })
+  await page.route('**/auth/me', async (route) => {
+    await route.fulfill({ status: 401, contentType: 'application/json', body: '{}' })
+  })
+  await page.route('**/auth/password', async (route) => {
+    await route.fulfill({
+      status: 401,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'invalid_password' }),
+    })
+  })
+
+  await page.goto('/')
+  await expect(page.locator('h1', { hasText: 'BigBadPhotos' })).toBeVisible({ timeout: 10_000 })
+  const passwordInput = page.locator('input[type="password"]')
+  await passwordInput.fill('wrong-password')
+  await page.locator('button', { hasText: 'Sign In' }).click()
+
+  await expect(page.locator('text=Incorrect password. Try again.')).toBeVisible({ timeout: 5_000 })
+  await expect(passwordInput).toHaveValue('')
+  await expect(page.locator('.auth-card')).toHaveClass(/bbp-shake/, { timeout: 2_000 })
 })
 
 test('appbar help button opens overlay', async ({ page }) => {

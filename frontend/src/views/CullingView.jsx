@@ -374,8 +374,8 @@ export default function CullingView({ feedbackIntensity = 'pronounced', showInli
               )}
             </div>
 
-            {/* Burst best badge */}
-            {photo.isBurstBest && (
+            {/* Burst best badge (multi-frame bursts only; solos are not labeled) */}
+            {photo.isBurstBest && photo.burstGroup != null && (
               <div style={{ position: 'absolute', top: 'var(--sp-4)', left: '50%', transform: 'translateX(-50%)', padding: '4px 10px', borderRadius: 999, background: 'rgba(0,0,0,.55)', backdropFilter: 'blur(8px)', border: '1px solid rgba(255,255,255,.08)' }} className="meta">
                 <span style={{ color: 'var(--keep)' }}>★ Best</span>
               </div>

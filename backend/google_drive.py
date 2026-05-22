@@ -58,6 +58,30 @@ def list_images(access_token: str, folder_id: str) -> list[dict[str, Any]]:
     ]
 
 
+SIDECAR_SUFFIX = '.bbp.json'
+
+def list_all(access_token: str, folder_id: str) -> list[dict[str, Any]]:
+    """
+    List all non-folder files in a Drive folder: images and .bbp.json sidecars.
+    Used by autonomous mode to detect both unprocessed images and existing sidecars.
+    """
+    q = (
+        f"'{folder_id}' in parents and trashed = false "
+        f"and mimeType != '{FOLDER_MIME}'"
+    )
+    files = _list_files(
+        access_token,
+        q,
+        fields='files(id,name,mimeType,size,modifiedTime)',
+    )
+    # Return images + bbp sidecars; exclude other file types
+    return [
+        f for f in files
+        if _is_supported_image(f.get('name', ''), f.get('mimeType', ''))
+        or f.get('name', '').endswith(SIDECAR_SUFFIX)
+    ]
+
+
 def _resolve_file_meta(
     access_token: str,
     file_id: str,

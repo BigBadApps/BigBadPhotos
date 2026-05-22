@@ -35,7 +35,9 @@ This project is managed by BigBadAgentForce.
   - `src/components/GoogleGate.jsx` — auth gate (`/auth/config`, `/auth/me`, password / dev / open)
   - `src/hooks/usePhotoRanker.js` — manual `beginScoring` to `/rank`, progress + ETA in store, 401 → session-expired UX
   - `src/hooks/useExporter.js` — export (FSAPI + iOS share/downloads), `exportDone` only on success
-  - `src/views/LandingView.jsx` — source folder, hero preview, explicit scoring CTA, review gate after scoring
+  - `src/hooks/useAutonomousMode.js` — autonomous mode pipeline, writes `.bbp.json` sidecars, polls for new images. Drive requires write scope. Safari uses `showDirectoryPicker` instead of `requestPermission`.
+  - `src/components/AutonomousPanel.jsx` — toggle and status for autonomous mode
+  - `src/views/LandingView.jsx` — source folder, hero preview, explicit scoring CTA, review gate after scoring, autonomous toggle
   - `src/views/CullingView.jsx` — AI filters, bulk Keep/Maybe/Reject, metric sidebar (`*_score` from `/rank`)
   - `src/views/ReviewExportView.jsx` — Review + export UI
   - `frontend/tests/e2e.spec.js` — Playwright smoke
