@@ -74,11 +74,15 @@ export function usePhotoRanker(loadingComplete) {
           if (cancelled) break
 
           const batch = scoreable.slice(i, i + RANK_BATCH_SIZE)
-          const results = await rankPhotos(batch)
+          const { results, rankingErrors } = await rankPhotos(batch)
 
           if (cancelled) break
 
           useStore.getState().batchUpdateScores(results)
+          if (rankingErrors.length) {
+            const msg = rankingErrors.map((e) => `${e.filename || e.id}: ${e.detail || 'failed'}`).join('; ')
+            setScoreError((prev) => (prev ? `${prev}; ${msg}` : msg))
+          }
           const done = i + batch.length
           setScoredCount(done)
           useStore.getState().setScoringProgress(done, scoreable.length)

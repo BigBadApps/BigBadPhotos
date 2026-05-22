@@ -1,13 +1,6 @@
-import { useEffect } from 'react';
 import Icon from './Icon';
 
 export default function HelpOverlay({ open, onClose }) {
-  useEffect(() => {
-    function onKey(e) { if (e.key === 'Escape') onClose(); }
-    if (open) window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
-
   if (!open) return null;
 
   const groups = [

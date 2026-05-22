@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import Icon from '../components/Icon';
 import { useStore } from '../store';
+import AutonomousPanel from '../components/AutonomousPanel';
 
 function formatEta(seconds) {
   if (seconds == null || !Number.isFinite(seconds)) return null;
@@ -65,6 +66,9 @@ export default function LandingView({
   onSelectDriveSource,
   onSelectDriveExport,
   reviewReady = false,
+  autonomousMode,
+  autoThreshold,
+  onThresholdChange,
 }) {
   const {
     source = '', exportTarget = '', total = 0, fileType = '—',
@@ -95,6 +99,7 @@ export default function LandingView({
     && !(scoringPct === 100 && scoringStarted);
 
   const [heroPhotoId, setHeroPhotoId] = useState(null);
+  const [pickerHint, setPickerHint] = useState(null);
   const previewableCount = useStore((s) => {
     let count = 0;
     for (const id of s.order) {
@@ -102,6 +107,18 @@ export default function LandingView({
     }
     return count;
   });
+
+  const handlePickSource = useCallback(() => {
+    setPickerHint('Opening folder picker…');
+    onSelectSource();
+    setTimeout(() => setPickerHint(null), 2000);
+  }, [onSelectSource]);
+
+  const handlePickExport = useCallback(() => {
+    setPickerHint('Opening folder picker…');
+    if (onSelectExport) onSelectExport();
+    setTimeout(() => setPickerHint(null), 2000);
+  }, [onSelectExport]);
 
   useEffect(() => {
     setHeroPhotoId(null);
@@ -243,13 +260,18 @@ export default function LandingView({
           <div className="card" style={{ padding: 'var(--sp-5)' }}>
             <div className="meta" style={{ marginBottom: 'var(--sp-4)' }}>Session folders</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
-              <FolderRow kind="Source" label="Select local folder" value={source} onPick={onSelectSource} accent={!source} />
+              <FolderRow kind="Source" label="Select local folder" value={source} onPick={handlePickSource} accent={!source} />
+              {pickerHint && (
+                <div className="fs-xxs mono upper" style={{ color: 'var(--accent)', textAlign: 'center', marginTop: 4, animation: 'bbp-fade-in .2s ease-out' }}>
+                  {pickerHint}
+                </div>
+              )}
               {onSelectDriveSource && (
                 <button type="button" className="btn btn-secondary btn-uppercase" onClick={onSelectDriveSource} disabled={driveConnecting || !driveAuthReady}>
                   {driveConnecting ? 'Connecting to Google Drive…' : !driveAuthReady ? 'Preparing Google Drive…' : 'Choose Google Drive source'}
                 </button>
               )}
-              <FolderRow kind="Export Target" label="Select local export folder" value={exportTarget} onPick={onSelectExport} />
+              <FolderRow kind="Export Target" label="Select local export folder" value={exportTarget} onPick={handlePickExport} />
               {onSelectDriveExport && (
                 <button type="button" className="btn btn-secondary btn-uppercase" onClick={onSelectDriveExport} disabled={driveConnecting || !driveAuthReady}>
                   {driveConnecting ? 'Connecting to Google Drive…' : !driveAuthReady ? 'Preparing Google Drive…' : 'Choose Google Drive export folder'}
@@ -267,6 +289,22 @@ export default function LandingView({
               </div>
             )}
           </div>
+
+          <AutonomousPanel
+            enabled={autonomousMode.enabled}
+            canEnable={autonomousMode.canEnable}
+            phase={autonomousMode.phase}
+            processedCount={autonomousMode.processedCount}
+            skippedCount={autonomousMode.skippedCount}
+            newArrivals={autonomousMode.newArrivals}
+            lastPollAt={autonomousMode.lastPollAt}
+            errors={autonomousMode.errors}
+            threshold={autoThreshold}
+            onThresholdChange={onThresholdChange}
+            isDriveSource={!!state.source?._drive || state.source.includes('Drive')}
+            isDriveDest={!!state.exportTarget?._drive || state.exportTarget.includes('Drive')}
+            onToggle={autonomousMode.toggle}
+          />
 
           {/* Library / progress card */}
           {source && (
@@ -368,7 +406,7 @@ export default function LandingView({
           )}
 
           {/* Begin AI scoring — after load, before / during first scoring run */}
-          {showBeginAiScoring && onBeginScoring && (
+          {!autonomousMode.enabled && showBeginAiScoring && onBeginScoring && (
             <button
               type="button"
               className="btn btn-ghost btn-uppercase"
@@ -381,15 +419,17 @@ export default function LandingView({
           )}
 
           {/* Begin review — only when export is set and scoring is done (or RAW-only) */}
-          <button
-            className="btn btn-primary btn-uppercase"
-            onClick={onBegin}
-            disabled={!reviewReady}
-            style={{ height: 56, fontSize: 'var(--fs-sm)', opacity: reviewReady ? 1 : 0.55 }}
-          >
-            <span>Begin Review</span>
-            <Icon name="arrowR" size={16} />
-          </button>
+          {!autonomousMode.enabled && (
+            <button
+              className="btn btn-primary btn-uppercase"
+              onClick={onBegin}
+              disabled={!reviewReady}
+              style={{ height: 56, fontSize: 'var(--fs-sm)', opacity: reviewReady ? 1 : 0.55 }}
+            >
+              <span>Begin Review</span>
+              <Icon name="arrowR" size={16} />
+            </button>
+          )}
 
           {!source && (
             <div className="fs-xxs dim mono upper ta-c">Pick a source folder to continue</div>
