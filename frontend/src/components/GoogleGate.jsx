@@ -109,14 +109,7 @@ function AuthGate({ onAuthed, authConfig }) {
       <div style={{ position: 'relative', width: '100%', maxWidth: 420, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--sp-7)' }}>
         {/* Brand */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--sp-4)' }}>
-          <div style={{
-            width: 56, height: 56, borderRadius: 14,
-            display: 'grid', placeItems: 'center',
-            background: 'var(--bg-2)', border: '1px solid var(--line)',
-            boxShadow: 'var(--accent-glow)',
-          }}>
-            <Icon name="aperture" size={28} />
-          </div>
+          <img src="/icon-192.png" alt="BigBadPhotos" style={{ width: 56, height: 56, borderRadius: 14, boxShadow: 'var(--accent-glow)' }} />
           <div style={{ textAlign: 'center' }}>
             <div className="meta" style={{ marginBottom: 6 }}>v0.4 &middot; Private Beta</div>
             <h1 style={{ margin: 0, fontSize: 'var(--fs-2xl)', fontWeight: 700, letterSpacing: 'var(--tracking-tight)' }}>BigBadPhotos</h1>
