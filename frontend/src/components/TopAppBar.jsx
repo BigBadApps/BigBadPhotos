@@ -27,7 +27,32 @@ export default function TopAppBar() {
   return (
     <header className="hidden md:flex justify-between items-center w-full px-8 h-16 bg-surface/80 backdrop-blur-xl border-b border-outline-variant/10 sticky top-0 z-40 shrink-0">
 
-      <div />
+      {/* Brand */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <svg width="28" height="28" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg">
+          <rect width="28" height="28" rx="6" fill="#1A1A1A"/>
+          <g transform="translate(14,14)">
+            <polygon points="-1.5,-3 2,-3 5,-11 -4,-11" fill="white" opacity="0.92"/>
+            <polygon points="-1.5,-3 2,-3 5,-11 -4,-11" fill="white" opacity="0.92" transform="rotate(60)"/>
+            <polygon points="-1.5,-3 2,-3 5,-11 -4,-11" fill="white" opacity="0.92" transform="rotate(120)"/>
+            <polygon points="-1.5,-3 2,-3 5,-11 -4,-11" fill="white" opacity="0.92" transform="rotate(180)"/>
+            <polygon points="-1.5,-3 2,-3 5,-11 -4,-11" fill="white" opacity="0.92" transform="rotate(240)"/>
+            <polygon points="-1.5,-3 2,-3 5,-11 -4,-11" fill="white" opacity="0.92" transform="rotate(300)"/>
+            <circle cx="0" cy="0" r="3.5" fill="#1A1A1A"/>
+          </g>
+        </svg>
+        <span style={{ fontFamily: 'var(--font-sans)', fontWeight: 700, fontSize: 15, letterSpacing: '-0.01em', color: 'var(--fg)' }}>
+          BigBadPhotos
+        </span>
+        <span style={{
+          padding: '2px 8px', borderRadius: 999,
+          background: 'var(--accent-soft)',
+          border: '1px solid color-mix(in oklab, var(--accent) 35%, transparent)',
+          fontFamily: 'var(--font-mono)', fontSize: 10,
+          letterSpacing: '0.1em', textTransform: 'uppercase',
+          color: 'var(--accent)',
+        }}>v2</span>
+      </div>
 
       {/* Right: workspace status + actions */}
       <div className="flex items-center gap-6">

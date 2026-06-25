@@ -4,6 +4,8 @@ import App from './App'
 import './index.css'
 import { useStore } from './store'
 
+document.documentElement.setAttribute('data-mode', 'light')
+
 // Expose store for Playwright tests and dev tooling
 window.__bbpStore = useStore
 

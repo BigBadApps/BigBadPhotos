@@ -104,10 +104,13 @@
 
 :root[data-mode="light"] {
   color-scheme: light;
-  --bg: #FAFAF9; --bg-2: #FFFFFF; --bg-3: #F4F4F2; --bg-4: #ECECEA;
-  --line: #E5E5E2; --line-2: #D4D4D0;
-  --fg: #0E0E0E; --fg-2: #4A4A48; --fg-3: #7A7A78; --fg-4: #A8A8A6;
-  --accent: #0073A8; --accent-soft: rgba(0,115,168,.10);
+  --bg: #EFF4F7; --bg-2: #FFFFFF; --bg-3: #E4EEF4; --bg-4: #D6E6EF;
+  --line: #C8D8E4; --line-2: #B0C8D8;
+  --fg: #0F1E2A; --fg-2: #3A5060; --fg-3: #6080A0; --fg-4: #A0B8C8;
+  --accent: #2596be; --accent-soft: rgba(37,150,190,.12);
+  --accent-glow: 0 0 0 1px rgba(37,150,190,.5), 0 0 24px rgba(37,150,190,.18);
+  --maybe: #0EA5E9;
+  --shadow-2: 0 8px 24px rgba(15,30,42,.10);
 }
 
 [data-density="compact"]     { --gap: 12px; --pad: 16px; }

@@ -525,7 +525,7 @@ export default function App() {
   useEffect(() => {
     const r = document.documentElement;
     r.setAttribute('data-theme', 'surgical');
-    r.setAttribute('data-mode', 'auto');
+    r.setAttribute('data-mode', 'light');
     r.setAttribute('data-density', 'comfortable');
   }, []);
 

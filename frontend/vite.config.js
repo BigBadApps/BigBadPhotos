@@ -19,6 +19,6 @@ export default defineConfig({
     sourcemap: true,
   },
   optimizeDeps: {
-    exclude: ['zustand'],
+    include: ['zustand', 'use-sync-external-store/shim/with-selector'],
   },
 })
