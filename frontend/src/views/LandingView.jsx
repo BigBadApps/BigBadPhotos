@@ -100,6 +100,10 @@ export default function LandingView({
 
   const [heroPhotoId, setHeroPhotoId] = useState(null);
   const [pickerHint, setPickerHint] = useState(null);
+  const [folderMode, setFolderMode] = useState('local');
+  const keepCount = useStore(s => s.getKeepCount());
+  const maybeCount = useStore(s => s.getMaybeCount());
+  const rejectCount = useStore(s => s.getRejectCount());
   const previewableCount = useStore((s) => {
     let count = 0;
     for (const id of s.order) {
@@ -139,6 +143,16 @@ export default function LandingView({
 
   return (
     <div className="view">
+      <div style={{
+        padding: '20px var(--pad) 16px',
+        borderBottom: '1px solid var(--line)',
+      }}>
+        <h2 style={{
+          margin: 0, fontFamily: 'var(--font-sans)',
+          fontSize: 'var(--fs-xl)', fontWeight: 700,
+          letterSpacing: 'var(--tracking-tight)', color: 'var(--fg)',
+        }}>Configure your session.</h2>
+      </div>
       <div
         style={{
           display: 'grid',
@@ -198,43 +212,16 @@ export default function LandingView({
           </div>
 
           <div style={{
-            position: 'absolute', inset: 'auto 0 0 0',
-            padding: 'var(--sp-7)',
-            background: 'linear-gradient(to top, rgba(0,0,0,.85), transparent)',
-            display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between',
-            gap: 'var(--sp-5)',
+            display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
+            padding: 'var(--sp-3) var(--sp-5)',
+            borderTop: '1px solid var(--line)',
+            background: 'var(--bg-2)',
+            flexShrink: 0,
           }}>
-            <div>
-              <div className="meta" style={{ color: 'var(--accent)', marginBottom: 8 }}>&middot; Session</div>
-              <h1 style={{ margin: 0, fontSize: 'clamp(28px, 4vw, 48px)', fontWeight: 700, letterSpacing: 'var(--tracking-tight)', lineHeight: 1.05, maxWidth: '20ch' }}>
-                {source
-                  ? isLoading ? 'Loading…'
-                  : loadingComplete ? 'Ready to cull.'
-                  : 'Choose your shoot.'
-                  : 'Choose your shoot.'}
-              </h1>
-              <p style={{ margin: '12px 0 0', color: 'var(--fg-2)', fontSize: 'var(--fs-md)', maxWidth: '40ch' }}>
-                {source && loadingComplete
-                  ? `${total.toLocaleString()} photos loaded${
-                    scoreableCount > 0
-                      ? (scoring
-                        ? ' · AI scoring in progress'
-                        : scoringPct === 100 && scoringStarted
-                          ? ' · AI scoring complete'
-                          : scoringStarted
-                            ? ''
-                            : ' · run AI scoring when ready')
-                      : ' · RAW files'
-                  }.`
-                  : source && isLoading
-                  ? `Loading photos from ${source}…`
-                  : 'Pick a local or Google Drive source folder, set an export target, and step into the darkroom.'}
-              </p>
-            </div>
-            <div className="meta" style={{ flexShrink: 0, textAlign: 'right' }}>
-              <div>{new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })}</div>
-              <div style={{ marginTop: 4, color: 'var(--fg-4)' }}>local &middot; {fileType.toLowerCase()}</div>
-            </div>
+            <span className="meta" style={{ color: 'var(--fg-3)', marginRight: 4 }}>Session</span>
+            <span className="dbadge keep"><span className="glyph" />Keep &middot; {keepCount}</span>
+            <span className="dbadge maybe"><span className="glyph" />Maybe &middot; {maybeCount}</span>
+            <span className="dbadge reject"><span className="glyph" />Reject &middot; {rejectCount}</span>
           </div>
 
           <div style={{
@@ -258,24 +245,65 @@ export default function LandingView({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--gap)', minWidth: 0 }}>
           
           <div className="card" style={{ padding: 'var(--sp-5)' }}>
-            <div className="meta" style={{ marginBottom: 'var(--sp-4)' }}>Session folders</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
-              <FolderRow kind="Source" label="Select local folder" value={source} onPick={handlePickSource} accent={!source} />
-              {pickerHint && (
-                <div className="fs-xxs mono upper" style={{ color: 'var(--accent)', textAlign: 'center', marginTop: 4, animation: 'bbp-fade-in .2s ease-out' }}>
-                  {pickerHint}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--sp-4)' }}>
+              <div className="meta">Session folders</div>
+              {onSelectDriveSource && (
+                <div style={{
+                  display: 'inline-flex', borderRadius: 8,
+                  border: '1px solid var(--line)', overflow: 'hidden',
+                }}>
+                  <button
+                    type="button"
+                    onClick={() => setFolderMode('local')}
+                    style={{
+                      padding: '4px 12px',
+                      fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-xxs)',
+                      letterSpacing: 'var(--tracking-meta)', textTransform: 'uppercase',
+                      background: folderMode === 'local' ? 'var(--accent)' : 'transparent',
+                      color: folderMode === 'local' ? '#fff' : 'var(--fg-3)',
+                      borderRight: '1px solid var(--line)',
+                      transition: 'all .15s var(--ease-out)',
+                    }}
+                  >Local</button>
+                  <button
+                    type="button"
+                    onClick={() => setFolderMode('drive')}
+                    style={{
+                      padding: '4px 12px',
+                      fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-xxs)',
+                      letterSpacing: 'var(--tracking-meta)', textTransform: 'uppercase',
+                      background: folderMode === 'drive' ? 'var(--accent)' : 'transparent',
+                      color: folderMode === 'drive' ? '#fff' : 'var(--fg-3)',
+                      transition: 'all .15s var(--ease-out)',
+                    }}
+                  >Drive</button>
                 </div>
               )}
-              {onSelectDriveSource && (
-                <button type="button" className="btn btn-secondary btn-uppercase" onClick={onSelectDriveSource} disabled={driveConnecting || !driveAuthReady}>
-                  {driveConnecting ? 'Connecting to Google Drive…' : !driveAuthReady ? 'Preparing Google Drive…' : 'Choose Google Drive source'}
-                </button>
-              )}
-              <FolderRow kind="Export Target" label="Select local export folder" value={exportTarget} onPick={handlePickExport} />
-              {onSelectDriveExport && (
-                <button type="button" className="btn btn-secondary btn-uppercase" onClick={onSelectDriveExport} disabled={driveConnecting || !driveAuthReady}>
-                  {driveConnecting ? 'Connecting to Google Drive…' : !driveAuthReady ? 'Preparing Google Drive…' : 'Choose Google Drive export folder'}
-                </button>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
+              {(!onSelectDriveSource || folderMode === 'local') ? (
+                <>
+                  <FolderRow kind="1 · Source" label="Select local folder" value={source} onPick={handlePickSource} accent={!source} />
+                  {pickerHint && (
+                    <div className="fs-xxs mono upper" style={{ color: 'var(--accent)', textAlign: 'center', marginTop: 4, animation: 'bbp-fade-in .2s ease-out' }}>
+                      {pickerHint}
+                    </div>
+                  )}
+                  <div style={{ opacity: source ? 1 : 0.45, transition: 'opacity .2s', pointerEvents: source ? 'auto' : 'none' }}>
+                    <FolderRow kind="2 · Export" label="Select local export folder" value={exportTarget} onPick={handlePickExport} />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <button type="button" className="btn btn-ghost btn-uppercase" onClick={onSelectDriveSource} disabled={driveConnecting || !driveAuthReady}>
+                    {driveConnecting ? 'Connecting…' : !driveAuthReady ? 'Preparing Drive…' : '1 · Source folder'}
+                  </button>
+                  {onSelectDriveExport && (
+                    <button type="button" className="btn btn-ghost btn-uppercase" onClick={onSelectDriveExport} disabled={driveConnecting || !driveAuthReady}>
+                      {driveConnecting ? 'Connecting…' : !driveAuthReady ? 'Preparing Drive…' : '2 · Export folder'}
+                    </button>
+                  )}
+                </>
               )}
             </div>
             {!driveAvailable && dev && (
