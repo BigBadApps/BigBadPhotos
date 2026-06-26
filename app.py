@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from typing import List
 from backend import google_drive
+from backend import topaz
 
 try:
     from dotenv import load_dotenv
@@ -72,7 +73,25 @@ if not ALLOWED_EMAILS:
     print("⚠️  BBP_ALLOWED_EMAILS is empty — all logins will be rejected")
 
 
-API_ROUTES = {'/analyze', '/rank'}
+API_ROUTES = {'/analyze', '/rank', '/edit', '/edit/file'}
+
+# Photo editing (Topaz) — LOCAL ONLY. Topaz runs on this machine; these routes
+# operate on absolute paths on the local filesystem, not uploaded bytes.
+EDITED_SUBDIR = 'edited'
+
+
+def _safe_in_dir(source_dir: str, filename: str) -> str:
+    """Resolve `filename` inside `source_dir`, rejecting traversal. Returns abs path.
+
+    Raises ValueError if filename escapes the directory or isn't a plain name.
+    """
+    if not filename or filename != os.path.basename(filename):
+        raise ValueError('filename must be a bare name, not a path')
+    base = os.path.realpath(source_dir)
+    full = os.path.realpath(os.path.join(base, filename))
+    if full != os.path.join(base, filename) and not full.startswith(base + os.sep):
+        raise ValueError('resolved path escapes source directory')
+    return full
 
 
 @app.after_request
@@ -828,6 +847,87 @@ def rank():
 
     except Exception as e:
         return jsonify({"error": "internal_error", "detail": str(e)}), 500
+
+
+@app.post("/edit")
+def edit():
+    """Run Topaz on one local image (LOCAL ONLY). Non-destructive.
+
+    Body (JSON):
+      source_dir    — absolute path to the folder holding the image (required)
+      filename      — bare filename within source_dir (required)
+      enhancements  — {"sharpen": true, "noise": true, ...}; if omitted and
+                      `iso` is given, defaults come from route_by_iso(iso)
+      iso           — EXIF ISO, used only when enhancements omitted
+      format/quality/overwrite — passed through to the wrapper
+    Writes to <source_dir>/edited/ and returns the edited filename + fetch URL.
+    """
+    data = request.get_json(silent=True) or {}
+    source_dir = data.get("source_dir")
+    filename = data.get("filename")
+    if not source_dir or not filename:
+        return jsonify({"error": "bad_request", "detail": "source_dir and filename are required"}), 400
+    if not os.path.isdir(source_dir):
+        return jsonify({"error": "not_found", "detail": f"source_dir does not exist: {source_dir}"}), 404
+
+    try:
+        input_path = _safe_in_dir(source_dir, filename)
+    except ValueError as e:
+        return jsonify({"error": "bad_request", "detail": str(e)}), 400
+    if not os.path.isfile(input_path):
+        return jsonify({"error": "not_found", "detail": f"file not found: {filename}"}), 404
+
+    enhancements = data.get("enhancements")
+    if enhancements is None:
+        enhancements = topaz.route_by_iso(data.get("iso"))
+
+    output_dir = os.path.join(os.path.realpath(source_dir), EDITED_SUBDIR)
+    try:
+        result = topaz.process(
+            inputs=[input_path],
+            output_dir=output_dir,
+            enhancements=enhancements,
+            fmt=data.get("format"),
+            quality=data.get("quality"),
+            overwrite=bool(data.get("overwrite", False)),
+            timeout_s=float(data.get("timeout_s", 600.0)),
+        )
+    except topaz.TopazError as e:
+        return jsonify({"error": "edit_config_error", "detail": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": "internal_error", "detail": str(e)}), 500
+
+    payload = result.to_dict()
+    payload["enhancements"] = enhancements
+    if result.ok and result.outputs:
+        edited_name = os.path.basename(result.outputs[0])
+        payload["edited_filename"] = edited_name
+        payload["edited_url"] = f"/edit/file?dir={source_dir}&name={edited_name}&variant=edited"
+        payload["original_url"] = f"/edit/file?dir={source_dir}&name={filename}&variant=original"
+    status_code = 200 if result.ok else 422
+    return jsonify(payload), status_code
+
+
+@app.get("/edit/file")
+def edit_file():
+    """Serve an original or edited image for the before/after viewer (LOCAL ONLY)."""
+    source_dir = request.args.get("dir")
+    name = request.args.get("name")
+    variant = request.args.get("variant", "original")
+    if not source_dir or not name:
+        return jsonify({"error": "bad_request", "detail": "dir and name are required"}), 400
+    serve_dir = os.path.realpath(source_dir)
+    if variant == "edited":
+        serve_dir = os.path.join(serve_dir, EDITED_SUBDIR)
+    if not os.path.isdir(serve_dir):
+        return jsonify({"error": "not_found", "detail": "directory not found"}), 404
+    try:
+        _safe_in_dir(serve_dir, name)  # traversal guard
+    except ValueError as e:
+        return jsonify({"error": "bad_request", "detail": str(e)}), 400
+    if not os.path.isfile(os.path.join(serve_dir, name)):
+        return jsonify({"error": "not_found", "detail": "file not found"}), 404
+    return send_from_directory(serve_dir, name)
 
 
 if __name__ == "__main__":

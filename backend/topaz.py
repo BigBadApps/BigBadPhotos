@@ -283,6 +283,36 @@ def process(
     )
 
 
+# --- ISO-aware default routing ---------------------------------------------
+
+# Default enhancement profiles by ISO band. Toggles only — Topaz Autopilot
+# picks the actual model + strength. Tunable; surfaced to the UI as the
+# starting point for Automate mode and the Edit tab defaults.
+ISO_PROFILES = (
+    # (max_iso_inclusive, enhancements)
+    (1600, {"sharpen": True, "noise": True}),                       # clean: light denoise + sharpen
+    (4000, {"noise": True, "sharpen": True}),                       # moderate grain
+    (10 ** 9, {"noise": True, "sharpen": True, "lighting": True}),  # high ISO: denoise-forward + lift exposure
+)
+
+
+def route_by_iso(iso: Optional[int]) -> dict[str, bool]:
+    """Return a default enhancements dict for a given EXIF ISO.
+
+    Falls back to the moderate profile when iso is unknown/None.
+    """
+    try:
+        iso_val = int(iso) if iso is not None else None
+    except (TypeError, ValueError):
+        iso_val = None
+    if iso_val is None:
+        return dict(ISO_PROFILES[1][1])
+    for max_iso, profile in ISO_PROFILES:
+        if iso_val <= max_iso:
+            return dict(profile)
+    return dict(ISO_PROFILES[-1][1])
+
+
 # --- CLI shim (called by n8n Execute Command) ------------------------------
 
 def _run_from_job(job: dict[str, Any]) -> TopazResult:
