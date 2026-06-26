@@ -1,6 +1,5 @@
 venv/
 .venv/
-backend/
 __pycache__/
 *.pyc
 .env
@@ -10,3 +9,4 @@ frontend/dist/
 *.crt
 *.key
 .DS_Store
+.preview/
