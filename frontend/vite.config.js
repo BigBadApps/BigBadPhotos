@@ -1,17 +1,22 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+// Overridable so multiple dev sessions can each point at their own backend
+// instance without editing this shared file; defaults preserve prior behavior.
+const API_PROXY = process.env.BBP_API_PROXY || 'http://localhost:8002'
+
 export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
     host: true,
     proxy: {
-      '/health':  'http://localhost:8002',
-      '/analyze': 'http://localhost:8002',
-      '/rank':    'http://localhost:8002',
-      '/auth':    'http://localhost:8002',
-      '/drive':   'http://localhost:8002',
+      '/health':  API_PROXY,
+      '/analyze': API_PROXY,
+      '/rank':    API_PROXY,
+      '/auth':    API_PROXY,
+      '/drive':   API_PROXY,
+      '/edit':    API_PROXY,
     },
   },
   build: {

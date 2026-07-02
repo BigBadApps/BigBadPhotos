@@ -1,0 +1,47 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend-flask",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "unset BBP_PASSWORD; exec .venv/bin/python app.py"],
+      "port": 8002,
+      "autoPort": false,
+      "cwd": ".",
+      "env": { "BBP_PORT": "8002" }
+    },
+    {
+      "name": "frontend-vite",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 5173,
+      "cwd": "frontend"
+    },
+    {
+      "name": "backend-flask-verify",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "unset BBP_PASSWORD; exec .venv/bin/python app.py"],
+      "port": 8003,
+      "autoPort": false,
+      "cwd": ".",
+      "env": { "BBP_PORT": "8003" }
+    },
+    {
+      "name": "frontend-vite-verify",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "--port", "5174", "--strictPort"],
+      "port": 5174,
+      "autoPort": false,
+      "cwd": "frontend",
+      "env": { "BBP_API_PROXY": "http://localhost:8003" }
+    },
+    {
+      "name": "topaz-comparison",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8090"],
+      "port": 8090,
+      "autoPort": false,
+      "cwd": ".preview/compare"
+    }
+  ]
+}

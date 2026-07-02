@@ -238,6 +238,19 @@ def process(
         show_settings=show_settings, skip_processing=skip_processing, extra=extra,
     )
 
+    # Snapshot output_dir mtimes before running so we can identify exactly
+    # which files this call produced (new names, or --overwrite in place),
+    # rather than every file that happens to already be in a shared dir.
+    before_mtimes: dict[str, float] = {}
+    if output_dir and os.path.isdir(output_dir):
+        for f in os.listdir(output_dir):
+            if f.startswith("."):
+                continue
+            try:
+                before_mtimes[f] = os.path.getmtime(os.path.join(output_dir, f))
+            except OSError:
+                pass
+
     logger.info("Running Topaz: %s", " ".join(shlex.quote(a) for a in argv))
     started = time.monotonic()
     try:
@@ -260,10 +273,18 @@ def process(
 
     outputs: list[str] = []
     if output_dir and os.path.isdir(output_dir):
-        outputs = sorted(
-            os.path.join(output_dir, f) for f in os.listdir(output_dir)
-            if not f.startswith(".")
-        )
+        new_or_changed = []
+        for f in os.listdir(output_dir):
+            if f.startswith("."):
+                continue
+            full = os.path.join(output_dir, f)
+            try:
+                mtime = os.path.getmtime(full)
+            except OSError:
+                continue
+            if f not in before_mtimes or mtime > before_mtimes[f]:
+                new_or_changed.append(full)
+        outputs = sorted(new_or_changed)
 
     detail = meaning
     if status in ("error", "invalid_argument", "no_valid_files") and stderr_clean:

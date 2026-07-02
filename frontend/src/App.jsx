@@ -7,6 +7,7 @@ import HelpOverlay from './components/HelpOverlay';
 import LandingView from './views/LandingView';
 import CullingView from './views/CullingView';
 import CompareView from './views/CompareView';
+import EditView from './views/EditView';
 import ReviewExportView from './views/ReviewExportView';
 import { usePhotoLoader } from './hooks/usePhotoLoader';
 import { usePhotoRanker } from './hooks/usePhotoRanker';
@@ -90,9 +91,10 @@ function AppContent() {
   const currentView = location.pathname === '/'        ? 'landing'
     : location.pathname === '/cull'    ? 'culling'
     : location.pathname === '/compare' ? 'compare'
+    : location.pathname === '/edit'    ? 'edit'
     : 'export';
 
-  const stepMap = { landing: 2, culling: 3, compare: 4, export: 5 };
+  const stepMap = { landing: 2, culling: 3, compare: 4, edit: 5, export: 6 };
 
   useEffect(() => {
     let toastTimer;
@@ -133,6 +135,12 @@ function AppContent() {
         return;
       }
       if (k === '4' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        if (!hasPhotos) { setToast({ message: 'Select a source folder first', at: Date.now() }); return; }
+        navigate('/edit');
+        return;
+      }
+      if (k === '5' && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         if (!hasPhotos) { setToast({ message: 'Select a source folder first', at: Date.now() }); return; }
         navigate('/review');
@@ -382,7 +390,7 @@ function AppContent() {
       <AppBar
         view={currentView}
         step={stepMap[currentView]}
-        totalSteps={5}
+        totalSteps={6}
         onHelp={() => setHelp(true)}
         projectName={sourceDir?.name || null}
       />
@@ -449,6 +457,7 @@ function AppContent() {
           } />
           <Route path="/cull"    element={hasPhotos ? <CullingView feedbackIntensity="pronounced" showInlineKbd onComplete={() => navigate('/review')} /> : <Navigate to="/" />} />
           <Route path="/compare" element={hasPhotos ? <CompareView /> : <Navigate to="/" />} />
+          <Route path="/edit"    element={hasPhotos ? <EditView /> : <Navigate to="/" />} />
           <Route path="/review"  element={hasPhotos ? <ReviewExportView /> : <Navigate to="/" />} />
         </Routes>
         {driveConnecting && (
@@ -495,6 +504,7 @@ function AppContent() {
           ['/', 'Landing', false],
           ['/cull', 'Culling', true],
           ['/compare', 'Compare', true],
+          ['/edit', 'Edit', true],
           ['/review', 'Export', true],
         ].map(([path, label, needsPhotos]) => {
           const disabled = needsPhotos && !hasPhotos;

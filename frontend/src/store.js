@@ -3,6 +3,7 @@ import { create } from 'zustand'
 export const useStore = create((set, get) => ({
   sourceDir: null,
   destDir: null,
+  sourceAbsPath: '',
   photos: {},
   order: [],
   currentId: null,
@@ -12,7 +13,9 @@ export const useStore = create((set, get) => ({
   isScoring: false,
   authSessionExpired: false,
   exportProgress: { done: 0, total: 0 },
+  editSettings: {},
   setSourceDir: (dir) => set({ sourceDir: dir }),
+  setSourceAbsPath: (path) => set({ sourceAbsPath: path }),
   clearPhotos: () => set({
     photos: {},
     order: [],
@@ -21,6 +24,8 @@ export const useStore = create((set, get) => ({
     scoringProgress: { done: 0, total: 0 },
     exportProgress: { done: 0, total: 0 },
     isScoring: false,
+    sourceAbsPath: '',
+    editSettings: {},
   }),
   setDestDir: (dir) => set({ destDir: dir }),
   setCurrentRoute: (route) => set({ currentRoute: route }),
@@ -101,6 +106,11 @@ export const useStore = create((set, get) => ({
   toggleFlag: (id) => {
     set((state) => ({
       photos: { ...state.photos, [id]: { ...state.photos[id], flagged: !state.photos[id].flagged } }
+    }))
+  },
+  setEditResult: (id, result) => {
+    set((state) => ({
+      editSettings: { ...state.editSettings, [id]: result },
     }))
   },
   setScoringProgress: (done, total) => set({ scoringProgress: { done, total } }),

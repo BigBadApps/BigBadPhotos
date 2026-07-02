@@ -35,6 +35,26 @@ export function buildSidecarPayload({ filename, result, threshold, exported }) {
  * @param {object} data — parsed JSON
  * @param {string} idForStore — photo id in zustand (local: filename; Drive: file id)
  */
+/**
+ * Merge Topaz edit settings into an existing (or new) sidecar payload,
+ * preserving any ranking fields already present.
+ * @param {object|null} existing — parsed sidecar JSON, or null if none exists yet
+ */
+export function applyEditPatch(existing, { filename, enhancements, editedFilename }) {
+  const base = existing && existing.schema === 'bigbadphotos.processed.v1'
+    ? existing
+    : { schema: 'bigbadphotos.processed.v1', filename }
+  return {
+    ...base,
+    filename,
+    edit: {
+      enhancements,
+      edited_filename: editedFilename,
+      edited_at: new Date().toISOString(),
+    },
+  }
+}
+
 export function sidecarToRankRow(data, idForStore) {
   if (!data || data.schema !== 'bigbadphotos.processed.v1') return null
   const os = data.overall_score
