@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
 import { useStore } from '../store'
+import { createZip } from '../utils/zip'
 import {
   ensureDriveWriteSession,
   isDriveExportAbortError,
@@ -158,20 +159,35 @@ export function useExporter() {
             return new File([blob], name, { type: blob.type || 'image/jpeg' })
           }))
 
+          const decisionsFile = new Blob([JSON.stringify(decisionsPayload, null, 2)], { type: 'application/json' })
+
+          let sharedOk = false
           if (navigator.canShare && navigator.canShare({ files })) {
-            await navigator.share({ files, title: 'BigBadPhotos Export' })
-            setExportedCount(queue.length)
-          } else {
-            for (let i = 0; i < files.length; i++) {
-              await triggerDownload(files[i], files[i].name)
-              setExportedCount(i + 1)
+            try {
+              await navigator.share({ files, title: 'BigBadPhotos Export' })
+              setExportedCount(queue.length)
+              sharedOk = true
+            } catch (err) {
+              if (err.name === 'AbortError') throw err // user cancelled the share sheet
+              // Web Share present but not permitted (e.g. desktop Brave/Chrome) —
+              // fall back to a single batched zip download.
+              console.warn('Web Share failed, falling back to a zip download:', err)
             }
           }
 
-          await triggerDownload(
-            new Blob([JSON.stringify(decisionsPayload, null, 2)], { type: 'application/json' }),
-            'bigbad_decisions.json'
-          )
+          if (sharedOk) {
+            // Images went via the share sheet; deliver the decisions sidecar too.
+            await triggerDownload(decisionsFile, 'bigbad_decisions.json')
+          } else {
+            // Batch everything into ONE zip so the browser makes a single download
+            // (e.g. Brave/Chrome without the File System Access API).
+            const entries = files.map(f => ({ name: f.name, blob: f }))
+            entries.push({ name: 'bigbad_decisions.json', blob: decisionsFile })
+            const baseName = newFolderName.trim() || 'BigBadPhotos_Export'
+            const zipBlob = await createZip(entries)
+            await triggerDownload(zipBlob, `${baseName}.zip`)
+            setExportedCount(queue.length)
+          }
           completedOk = true
         } catch (err) {
           if (err.name !== 'AbortError') {

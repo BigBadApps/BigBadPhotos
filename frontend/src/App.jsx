@@ -245,30 +245,34 @@ function AppContent() {
   }, [setDestDir]);
 
   const pickSource = useCallback(async () => {
-    if (!HAS_DIR_PICKER) {
-      fileInputRef.current?.click();
-      return;
+    if (HAS_DIR_PICKER) {
+      try {
+        const dir = await window.showDirectoryPicker({ mode: 'read' });
+        clearPhotos();
+        setSourceDir(dir);
+        return;
+      } catch (err) {
+        if (err.name === 'AbortError') return; // user cancelled — no fallback
+        // Native picker present but blocked (e.g. Brave Shields) — fall back below.
+        console.warn('Source directory picker unavailable, using file input:', err);
+      }
     }
-    try {
-      const dir = await window.showDirectoryPicker({ mode: 'read' });
-      clearPhotos();
-      setSourceDir(dir);
-    } catch (err) {
-      if (err.name !== 'AbortError') console.error('Source picker:', err);
-    }
+    fileInputRef.current?.click();
   }, [setSourceDir, clearPhotos]);
 
   const pickExport = useCallback(async () => {
-    if (!HAS_DIR_PICKER) {
-      exportInputRef.current?.click();
-      return;
+    if (HAS_DIR_PICKER) {
+      try {
+        const dir = await window.showDirectoryPicker({ mode: 'readwrite' });
+        setDestDir(dir);
+        return;
+      } catch (err) {
+        if (err.name === 'AbortError') return; // user cancelled — no fallback
+        // Native picker present but blocked (e.g. Brave Shields) — fall back below.
+        console.warn('Export directory picker unavailable, using file input:', err);
+      }
     }
-    try {
-      const dir = await window.showDirectoryPicker({ mode: 'readwrite' });
-      setDestDir(dir);
-    } catch (err) {
-      if (err.name !== 'AbortError') console.error('Export picker:', err);
-    }
+    exportInputRef.current?.click();
   }, [setDestDir]);
 
   // Derive file type label from loaded photos
@@ -444,7 +448,7 @@ function AppContent() {
             <LandingView
               state={landingState}
               onSelectSource={pickSource}
-              onSelectExport={HAS_DIR_PICKER ? pickExport : undefined}
+              onSelectExport={pickExport}
               onSelectDriveSource={driveAvailable ? () => openDrivePicker('source') : undefined}
               onSelectDriveExport={driveAvailable ? () => openDrivePicker('export') : undefined}
               onBeginScoring={beginScoring}
