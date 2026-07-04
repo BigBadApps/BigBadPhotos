@@ -12,6 +12,7 @@ from datetime import timedelta
 from typing import List
 from backend import google_drive
 from backend import topaz
+from backend import google_auth
 
 try:
     from dotenv import load_dotenv
@@ -197,6 +198,8 @@ def auth_config():
         'dev': IS_DEBUG,
         'open': not HAS_AUTH,
         'drive': bool(GOOGLE_CLIENT_ID),
+        'serverGoogle': google_auth.get_manager().available(),
+        'worker': google_auth.get_manager().available(),
     })
 
 
@@ -219,14 +222,64 @@ def auth_password():
     return jsonify({'ok': True, 'user': session['user']})
 
 
+@app.get('/google/oauth/start')
+def google_oauth_start():
+    """Begin the server-side authorization-code flow (owner connects once)."""
+    if not session.get('user'):
+        return jsonify({'error': 'not_authenticated'}), 401
+    client_secret = os.environ.get('GOOGLE_CLIENT_SECRET', '')
+    if not GOOGLE_CLIENT_ID or not client_secret:
+        return jsonify({'error': 'server_google_not_configured',
+                        'detail': 'Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET'}), 400
+    state = secrets.token_urlsafe(24)
+    session['google_oauth_state'] = state
+    redirect_uri = request.host_url.rstrip('/') + '/google/oauth/callback'
+    from flask import redirect
+    return redirect(google_auth.build_auth_url(GOOGLE_CLIENT_ID, redirect_uri, state))
+
+
+@app.get('/google/oauth/callback')
+def google_oauth_callback():
+    from flask import redirect
+    if not session.get('user'):
+        return redirect('/?googleAuth=error&detail=not_authenticated')
+    state = request.args.get('state', '')
+    if not state or state != session.pop('google_oauth_state', None):
+        return redirect('/?googleAuth=error&detail=bad_state')
+    if request.args.get('error'):
+        return redirect(f"/?googleAuth=error&detail={request.args['error']}")
+    code = request.args.get('code', '')
+    if not code:
+        return redirect('/?googleAuth=error&detail=missing_code')
+    redirect_uri = request.host_url.rstrip('/') + '/google/oauth/callback'
+    try:
+        tokens = google_auth.exchange_code(
+            GOOGLE_CLIENT_ID, os.environ.get('GOOGLE_CLIENT_SECRET', ''), code, redirect_uri)
+    except google_auth.GoogleAuthError as e:
+        return redirect(f'/?googleAuth=error&detail={str(e)[:120]}')
+    google_auth.get_manager().store_tokens(tokens)
+    return redirect('/?googleAuth=connected')
+
+
 def _drive_token() -> str | None:
     return session.get('google_drive_token')
+
+
+def _google_token() -> str | None:
+    """Server-stored refresh-token credentials first, then the session token."""
+    mgr = google_auth.get_manager()
+    if mgr.available():
+        try:
+            return mgr.get_access_token()
+        except google_auth.GoogleAuthError:
+            pass  # fall back to the browser-granted session token
+    return _drive_token()
 
 
 def _drive_auth_error():
     if not session.get('user'):
         return jsonify({'error': 'not_authenticated'}), 401
-    if not _drive_token():
+    if not _google_token():
         return jsonify({'error': 'drive_not_authorized'}), 401
     return None
 
@@ -246,7 +299,8 @@ def drive_status():
         user = session['user']
     return jsonify({
         'authenticated': bool(user),
-        'driveAuthorized': bool(user and _drive_token()),
+        'driveAuthorized': bool(user and _google_token()),
+        'serverGoogleAuth': google_auth.get_manager().available(),
     })
 
 
@@ -278,11 +332,11 @@ def drive_browse():
     mode = request.args.get('mode', 'folders')
     try:
         if mode == 'images':
-            files = google_drive.list_images(_drive_token(), parent_id)
+            files = google_drive.list_images(_google_token(), parent_id)
         elif mode == 'all':
-            files = google_drive.list_all(_drive_token(), parent_id)
+            files = google_drive.list_all(_google_token(), parent_id)
         else:
-            files = google_drive.list_folders(_drive_token(), parent_id)
+            files = google_drive.list_folders(_google_token(), parent_id)
     except Exception as exc:
         return jsonify({'error': 'drive_list_failed', 'detail': str(exc)}), 502
     return jsonify({'parentId': parent_id, 'mode': mode, 'items': files})
@@ -297,7 +351,7 @@ def drive_download(file_id):
     mime_type = request.args.get('mimeType')
     try:
         body, resolved_name, resolved_mime = google_drive.stream_file(
-            _drive_token(),
+            _google_token(),
             file_id,
             filename=filename,
             mime_type=mime_type,
@@ -326,7 +380,7 @@ def drive_upload():
         return jsonify({'error': 'empty_file'}), 400
     try:
         created = google_drive.upload_file(
-            _drive_token(),
+            _google_token(),
             parent_id,
             upload.filename or 'upload.bin',
             payload,
