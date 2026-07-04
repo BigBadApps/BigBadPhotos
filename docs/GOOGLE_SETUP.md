@@ -16,8 +16,9 @@ your existing `GOOGLE_CLIENT_ID`.
 
 ## 3. OAuth client
 - APIs & Services → Credentials → your existing **Web application** client:
-  - Authorized redirect URIs → add `http://localhost:8002/google/oauth/callback`
-    (plus the port you actually run Flask on, if different).
+  - Authorized redirect URIs → add `http://localhost:8001/google/oauth/callback`
+    AND `http://localhost:8002/google/oauth/callback` (default port and dev-server
+    port, respectively), plus whatever port you actually run Flask on if different.
   - Copy the **Client secret**.
 
 ## 4. Environment

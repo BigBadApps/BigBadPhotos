@@ -109,6 +109,39 @@ def test_clear_removes_file():
         assert m.available() is False
 
 
+def test_refresh_network_error_raises_google_auth_error():
+    with tempfile.TemporaryDirectory() as d:
+        m = _mgr(d)
+        m.store_tokens({'refresh_token': 'r1', 'access_token': 'old', 'expires_in': 30})
+        # expires_in 30s is inside the 120s margin -> refresh path
+
+        def fake_post(url, data=None, timeout=None):
+            raise google_auth.requests.exceptions.RequestException('net down')
+
+        google_auth.requests.post, orig = fake_post, google_auth.requests.post
+        try:
+            m.get_access_token()
+        except google_auth.GoogleAuthError:
+            return
+        finally:
+            google_auth.requests.post = orig
+        raise AssertionError('expected GoogleAuthError')
+
+
+def test_exchange_code_network_error_raises_google_auth_error():
+    def fake_post(url, data=None, timeout=None):
+        raise google_auth.requests.exceptions.RequestException('net down')
+
+    google_auth.requests.post, orig = fake_post, google_auth.requests.post
+    try:
+        google_auth.exchange_code('c', 's', 'code', 'uri')
+    except google_auth.GoogleAuthError:
+        return
+    finally:
+        google_auth.requests.post = orig
+    raise AssertionError('expected GoogleAuthError')
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

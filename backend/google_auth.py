@@ -52,13 +52,16 @@ def build_auth_url(client_id: str, redirect_uri: str, state: str) -> str:
 
 
 def exchange_code(client_id: str, client_secret: str, code: str, redirect_uri: str) -> dict:
-    resp = requests.post(GOOGLE_TOKEN_URL, data={
-        'client_id': client_id,
-        'client_secret': client_secret,
-        'code': code,
-        'grant_type': 'authorization_code',
-        'redirect_uri': redirect_uri,
-    }, timeout=30)
+    try:
+        resp = requests.post(GOOGLE_TOKEN_URL, data={
+            'client_id': client_id,
+            'client_secret': client_secret,
+            'code': code,
+            'grant_type': 'authorization_code',
+            'redirect_uri': redirect_uri,
+        }, timeout=30)
+    except requests.exceptions.RequestException as exc:
+        raise GoogleAuthError(f'code exchange failed: {exc}') from exc
     if not resp.ok:
         detail = resp.text
         try:
@@ -134,12 +137,15 @@ class GoogleAuthManager:
             return self._refresh_locked(data)
 
     def _refresh_locked(self, data: dict[str, Any]) -> str:
-        resp = requests.post(GOOGLE_TOKEN_URL, data={
-            'client_id': self.client_id,
-            'client_secret': self.client_secret,
-            'refresh_token': data['refresh_token'],
-            'grant_type': 'refresh_token',
-        }, timeout=30)
+        try:
+            resp = requests.post(GOOGLE_TOKEN_URL, data={
+                'client_id': self.client_id,
+                'client_secret': self.client_secret,
+                'refresh_token': data['refresh_token'],
+                'grant_type': 'refresh_token',
+            }, timeout=30)
+        except requests.exceptions.RequestException as exc:
+            raise GoogleAuthError(f'token refresh failed: {exc}') from exc
         if not resp.ok:
             detail = resp.text
             try:
