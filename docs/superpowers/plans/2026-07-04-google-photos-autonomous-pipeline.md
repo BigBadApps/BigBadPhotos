@@ -3095,7 +3095,12 @@ export default function ServerAutonomousPanel() {
 }
 ```
 
-- [ ] **Step 3: Gate inside AutonomousPanel.jsx**
+- [ ] **Step 3: Gate via wrapper component in AutonomousPanel.jsx**
+
+An early return inside the existing component would change the number of hook
+calls when `available` flips from false→true after the config fetch — a
+rules-of-hooks crash. Use a wrapper component instead: each branch is its own
+component with a stable hook count.
 
 At the top of `frontend/src/components/AutonomousPanel.jsx` add imports:
 
@@ -3105,17 +3110,24 @@ import { useServerAutonomous } from '../hooks/useServerAutonomous'
 import ServerAutonomousPanel from './ServerAutonomousPanel'
 ```
 
-First lines inside the `AutonomousPanel` function body:
+Rename the existing `export default function AutonomousPanel({...})` to
+`function LegacyAutonomousPanel({...})` (body 100% unchanged), then add at the
+bottom of the file:
 
 ```jsx
-  const serverWorker = useServerAutonomous()
+export default function AutonomousPanel(props) {
+  const { available } = useServerAutonomous()
   const sourceDir = useStore(s => s.sourceDir)
-  if (serverWorker.available && sourceDir?._drive) {
+  if (available && sourceDir?._drive) {
     return <ServerAutonomousPanel />
   }
+  return <LegacyAutonomousPanel {...props} />
+}
 ```
 
-(Hook-order safe: `useServerAutonomous`/`useStore` run unconditionally before the early return; the legacy hooks below them are plain `useState`/`useEffect` already in the component — keep the early return ABOVE none of them. If the existing hooks sit above the insertion point, place the gate return after ALL existing hook calls to respect the rules of hooks.)
+(Yes, `useServerAutonomous` runs again inside `ServerAutonomousPanel` — two
+instances, one status poller each while running. Acceptable; keeps both
+components self-contained.)
 
 - [ ] **Step 4: Verify build + preview smoke**
 
