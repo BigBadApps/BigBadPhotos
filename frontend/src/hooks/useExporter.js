@@ -6,6 +6,7 @@ import {
   isDriveExportAbortError,
   uploadDriveFile,
 } from '../utils/googleDrive'
+import { uploadPhotoToAlbum, isPhotosAuthError } from '../utils/googlePhotos'
 
 const HAS_DIR_PICKER = typeof window !== 'undefined' && 'showDirectoryPicker' in window
 
@@ -41,6 +42,7 @@ async function encodeAsJpeg(file) {
 export function useExporter() {
   const photos = useStore(state => state.photos)
   const destDir = useStore(state => state.destDir)
+  const photosAlbum = useStore(state => state.photosAlbum)
 
   const [exporting, setExporting] = useState(false)
   const [exportedCount, setExportedCount] = useState(0)
@@ -49,12 +51,54 @@ export function useExporter() {
   const [exportDone, setExportDone] = useState(false)
   const [failedFiles, setFailedFiles] = useState([])
 
-  const startExport = useCallback(async ({ fileFormat = 'original', includeMaybes = false, newFolderName = '' } = {}) => {
+  const startExport = useCallback(async ({ fileFormat = 'original', includeMaybes = false, newFolderName = '', destination = 'folder' } = {}) => {
     const queue = Object.values(photos).filter(p =>
       p.file && (p.decision === 'keep' || (includeMaybes && p.decision === 'maybe'))
     )
     if (queue.length === 0) {
       setExportError('No photos to export.')
+      return
+    }
+
+    if (destination === 'photos') {
+      if (!photosAlbum?.id) {
+        setExportError('Select a Google Photos album first.')
+        return
+      }
+      setExporting(true)
+      setExportDone(false)
+      setExportError(null)
+      setFailedFiles([])
+      setExportedCount(0)
+      setExportTotal(queue.length)
+      const failed = []
+      let aborted = false
+      try {
+        for (let i = 0; i < queue.length; i++) {
+          const photo = queue[i]
+          try {
+            const convertToJpeg = fileFormat === 'jpg' && !photo.isRaw
+            const exportName = convertToJpeg
+              ? photo.filename.replace(/\.[^.]+$/, '.jpg')
+              : photo.filename
+            const blob = convertToJpeg ? await encodeAsJpeg(photo.file) : photo.file
+            const file = new File([blob], exportName, { type: blob.type || 'image/jpeg' })
+            await uploadPhotoToAlbum(photosAlbum.id, file)
+          } catch (err) {
+            failed.push({ filename: photo.filename, reason: err.message })
+            if (isPhotosAuthError(err)) {
+              setExportError(`Google Photos session problem: ${err.message}`)
+              aborted = true
+            }
+          }
+          setExportedCount(i + 1)
+          if (aborted) break
+        }
+      } finally {
+        setFailedFiles(failed)
+        setExporting(false)
+        if (!aborted) setExportDone(true)
+      }
       return
     }
 
@@ -238,7 +282,7 @@ export function useExporter() {
       setExporting(false)
       if (completedOk) setExportDone(true)
     }
-  }, [photos, destDir])
+  }, [photos, destDir, photosAlbum])
 
   const reset = useCallback(() => {
     setExportDone(false)
