@@ -3,6 +3,7 @@ import { create } from 'zustand'
 export const useStore = create((set, get) => ({
   sourceDir: null,
   destDir: null,
+  photosAlbum: null,
   sourceAbsPath: '',
   photos: {},
   order: [],
@@ -28,6 +29,7 @@ export const useStore = create((set, get) => ({
     editSettings: {},
   }),
   setDestDir: (dir) => set({ destDir: dir }),
+  setPhotosAlbum: (album) => set({ photosAlbum: album }),
   setCurrentRoute: (route) => set({ currentRoute: route }),
 
   addPhotos: (photos) => {
