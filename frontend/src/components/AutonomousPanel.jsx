@@ -5,6 +5,9 @@
  * When enabled:  live phase indicator, counters, poll countdown, error list.
  */
 import { useState, useEffect, useCallback } from 'react'
+import { useStore } from '../store'
+import { useServerAutonomous } from '../hooks/useServerAutonomous'
+import ServerAutonomousPanel from './ServerAutonomousPanel'
 
 const PHASE_LABEL = {
   idle:      '—',
@@ -35,7 +38,7 @@ function PollCountdown({ lastPollAt, pollIntervalSec = 30 }) {
   return <span className="mono fs-xxs" style={{ color: 'var(--fg-4)' }}>next scan in {left}s</span>
 }
 
-export default function AutonomousPanel({
+function LegacyAutonomousPanel({
   enabled, canEnable, phase,
   processedCount, skippedCount, newArrivals,
   lastPollAt, errors,
@@ -196,4 +199,13 @@ export default function AutonomousPanel({
       )}
     </div>
   )
+}
+
+export default function AutonomousPanel(props) {
+  const { available } = useServerAutonomous()
+  const sourceDir = useStore(s => s.sourceDir)
+  if (available && sourceDir?._drive) {
+    return <ServerAutonomousPanel />
+  }
+  return <LegacyAutonomousPanel {...props} />
 }
