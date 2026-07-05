@@ -77,8 +77,20 @@ export default function EditView() {
   const queueRef = useRef(Promise.resolve())
   const seededForId = useRef(null)
   const writableRef = useRef(null)
+  // The edited file is overwritten in place at the same path on every
+  // render, so its URL never changes and the browser just serves its
+  // cached copy. Tag each completed render with a bump so the <img> src
+  // changes and forces a re-fetch — otherwise toggling tools and clicking
+  // Apply silently keeps showing the previous render.
+  const renderVersionRef = useRef(0)
 
-  const isLocal = !!sourceDir && !sourceDir._drive && !sourceDir._ios
+  // Only Drive sources are truly unreachable (files aren't on this Mac at
+  // all). `_ios` also fires for the desktop file-input fallback used when
+  // showDirectoryPicker is missing/blocked (Brave, Firefox) — those are
+  // still local files Topaz can reach once the user types the abs path;
+  // they just can't get a writable FSAPI handle for the sidecar (handled
+  // separately in ensureWritable, which degrades to a warning).
+  const isLocal = !!sourceDir && !sourceDir._drive
 
   useEffect(() => {
     if (index > keepers.length) setIndex(keepers.length)
@@ -100,7 +112,7 @@ export default function EditView() {
           enhancements,
           overwrite: true,
         })
-        updateEntry(photo.id, resultToEntry(result))
+        updateEntry(photo.id, { ...resultToEntry(result), version: ++renderVersionRef.current })
       } catch (err) {
         updateEntry(photo.id, { status: 'error', error: err.body?.detail || err.message })
       }
@@ -334,7 +346,7 @@ export default function EditView() {
         {isDone && (
           <BeforeAfterViewer
             originalUrl={editFileUrl(sourceAbsPath, currentPhoto.filename, 'original')}
-            editedUrl={editFileUrl(sourceAbsPath, currentEntry.editedFilename, 'edited')}
+            editedUrl={`${editFileUrl(sourceAbsPath, currentEntry.editedFilename, 'edited')}&v=${currentEntry.version}`}
           />
         )}
 

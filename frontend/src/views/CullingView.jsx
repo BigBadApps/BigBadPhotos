@@ -98,27 +98,29 @@ function DecisionDock({ counts, decision, decide, undo, canUndo, showInlineKbd }
             onClick={() => decide(kind)}
             style={{
               height: 56, borderRadius: 10, padding: '0 12px',
-              background: isActive ? `color-mix(in oklab, var(--${kind}) 18%, var(--bg-3))` : 'var(--bg-3)',
+              background: isActive ? `var(--${kind})` : 'var(--bg-3)',
               border: `1px solid ${isActive ? `var(--${kind})` : 'var(--line)'}`,
+              color: isActive ? '#0c0c0e' : 'var(--fg)',
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               gap: 8, cursor: 'pointer', transition: 'all .12s var(--ease-out)',
+              boxShadow: isActive ? `0 0 16px color-mix(in oklab, var(--${kind}) 40%, transparent)` : 'none',
             }}
           >
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{
                 width: 28, height: 28, borderRadius: 99,
-                background: `color-mix(in oklab, var(--${kind}) ${isActive ? 30 : 20}%, var(--bg-2))`,
-                color: `var(--${kind})`, display: 'grid', placeItems: 'center', flexShrink: 0,
+                background: isActive ? 'rgba(0,0,0,.08)' : `color-mix(in oklab, var(--${kind}) 20%, var(--bg-2))`,
+                color: isActive ? '#0c0c0e' : `var(--${kind})`, display: 'grid', placeItems: 'center', flexShrink: 0,
               }}>
-                <Icon name={icon} size={14} stroke={2} />
+                <Icon name={icon} size={14} stroke={2.5} />
               </span>
               <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-                <span className="fs-sm dock-label" style={{ fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase', color: isActive ? `var(--${kind})` : 'var(--fg)' }}>{label}</span>
-                <span className="mono fs-xxs dock-count" style={{ color: 'var(--fg-3)' }}>{counts[kind]}</span>
+                <span className="fs-sm dock-label" style={{ fontWeight: 600, letterSpacing: '.04em', textTransform: 'uppercase', color: isActive ? '#0c0c0e' : 'var(--fg)' }}>{label}</span>
+                <span className="mono fs-xxs dock-count" style={{ color: isActive ? 'rgba(12,12,14,.7)' : 'var(--fg-3)' }}>{counts[kind]}</span>
               </span>
             </span>
             {showInlineKbd && (
-              <kbd className="dock-kbd" style={{ fontFamily: 'var(--font-mono)', fontSize: 10, padding: '3px 6px', background: 'var(--bg-2)', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--fg-3)' }}>{kbd}</kbd>
+              <kbd className="dock-kbd" style={{ fontFamily: 'var(--font-mono)', fontSize: 10, padding: '3px 6px', background: isActive ? 'rgba(0,0,0,.06)' : 'var(--bg-2)', border: `1px solid ${isActive ? 'rgba(0,0,0,.15)' : 'var(--line)'}`, borderRadius: 4, color: isActive ? 'rgba(12,12,14,.8)' : 'var(--fg-3)' }}>{kbd}</kbd>
             )}
           </button>
         );

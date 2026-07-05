@@ -6,7 +6,7 @@ Usage:
 
 Agreement analysis uses, when present in the folder:
   - bigbad_decisions.json  (exported decisions: keep/maybe/reject per filename)
-  - <image>.bbp.json sidecars with a prior overall_score
+  Note: `.bbp.json` sidecars are not currently scanned; only `bigbad_decisions.json` is used.
 """
 from __future__ import annotations
 

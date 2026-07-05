@@ -6,7 +6,6 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { useStore } from '../store'
-import { useServerAutonomous } from '../hooks/useServerAutonomous'
 import ServerAutonomousPanel from './ServerAutonomousPanel'
 
 const PHASE_LABEL = {
@@ -202,8 +201,16 @@ function LegacyAutonomousPanel({
 }
 
 export default function AutonomousPanel(props) {
-  const { available } = useServerAutonomous()
+  const [available, setAvailable] = useState(false)
   const sourceDir = useStore(s => s.sourceDir)
+  useEffect(() => {
+    let alive = true
+    fetch('/auth/config', { credentials: 'include' })
+      .then(r => r.ok ? r.json() : {})
+      .then(cfg => { if (alive) setAvailable(!!cfg.worker) })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [])
   if (available && sourceDir?._drive) {
     return <ServerAutonomousPanel />
   }

@@ -37,7 +37,7 @@ export function useServerAutonomous() {
     const running = !!status?.running
     clearInterval(timerRef.current)
     if (running) timerRef.current = setInterval(fetchStatus, POLL_MS)
-    return () => clearInterval(timerRef.current)
+    return () => { if (timerRef.current) clearInterval(timerRef.current) }
   }, [status?.running, fetchStatus])
 
   const start = useCallback(async (config) => {
