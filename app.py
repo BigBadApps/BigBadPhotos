@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from typing import List
 from backend import google_drive
+from backend import google_photos
 from backend import topaz
 from backend import google_auth
 
@@ -110,7 +111,10 @@ def set_csrf_cookie(response):
 def enforce_auth():
     if request.path == '/drive/status':
         return
-    if request.path not in API_ROUTES and not request.path.startswith('/drive'):
+    if (request.path not in API_ROUTES
+            and not request.path.startswith('/drive')
+            and not request.path.startswith('/photos')
+            and not request.path.startswith('/autonomous')):
         return  # static files, /health, /auth/* all pass through
     if not HAS_AUTH:
         return  # No auth configured = open access
@@ -389,6 +393,75 @@ def drive_upload():
     except Exception as exc:
         return jsonify({'error': 'drive_upload_failed', 'detail': str(exc)}), 502
     return jsonify({'ok': True, 'file': created})
+
+
+def _photos_auth_error():
+    if not session.get('user'):
+        return jsonify({'error': 'not_authenticated'}), 401
+    if not _google_token():
+        return jsonify({'error': 'photos_not_authorized',
+                        'detail': 'Connect Google via /google/oauth/start'}), 401
+    return None
+
+
+@app.get('/photos/albums')
+def photos_albums():
+    err = _photos_auth_error()
+    if err:
+        return err
+    try:
+        albums = google_photos.list_albums(_google_token())
+    except Exception as exc:
+        return jsonify({'error': 'photos_list_failed', 'detail': str(exc)}), 502
+    return jsonify({'albums': albums})
+
+
+@app.post('/photos/albums')
+def photos_create_album():
+    err = _photos_auth_error()
+    if err:
+        return err
+    data = request.get_json(silent=True) or {}
+    title = (data.get('title') or '').strip()
+    if not title:
+        return jsonify({'error': 'bad_request', 'detail': 'title is required'}), 400
+    try:
+        album = google_photos.create_album(_google_token(), title)
+    except Exception as exc:
+        return jsonify({'error': 'photos_create_failed', 'detail': str(exc)}), 502
+    return jsonify({'ok': True, 'album': album})
+
+
+@app.post('/photos/upload')
+def photos_upload():
+    err = _photos_auth_error()
+    if err:
+        return err
+    album_id = request.form.get('albumId') or ''
+    if not album_id:
+        return jsonify({'error': 'missing_album_id'}), 400
+    if 'file' not in request.files:
+        return jsonify({'error': 'missing_file'}), 400
+    upload = request.files['file']
+    payload = upload.read()
+    if not payload:
+        return jsonify({'error': 'empty_file'}), 400
+    filename = upload.filename or 'upload.jpg'
+    try:
+        token = _google_token()
+        upload_token = google_photos.upload_bytes(
+            token, filename, payload, upload.mimetype or 'image/jpeg')
+        results = google_photos.batch_create(token, album_id, [
+            {'uploadToken': upload_token, 'filename': filename},
+        ])
+    except Exception as exc:
+        return jsonify({'error': 'photos_upload_failed', 'detail': str(exc)}), 502
+    result = results[0] if results else {'ok': False, 'error': 'no result returned'}
+    if not result.get('ok'):
+        return jsonify({'error': 'photos_upload_failed',
+                        'detail': result.get('error', 'unknown')}), 502
+    return jsonify({'ok': True, 'filename': filename,
+                    'mediaItemId': result.get('mediaItemId')})
 
 
 @app.route('/', defaults={'path': ''})
