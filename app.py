@@ -14,6 +14,7 @@ from backend import google_drive
 from backend import google_photos
 from backend import topaz
 from backend import google_auth
+from backend import session_worker
 from backend.scoring import (
     decode_image, score_sharpness, score_exposure, score_noise,
     score_contrast, score_faces, compute_phash, hamming_distance,
@@ -468,6 +469,40 @@ def photos_upload():
                         'detail': result.get('error', 'unknown')}), 502
     return jsonify({'ok': True, 'filename': filename,
                     'mediaItemId': result.get('mediaItemId')})
+
+
+@app.post('/autonomous/start')
+def autonomous_start():
+    mgr = google_auth.get_manager()
+    if not mgr.available():
+        return jsonify({'error': 'server_google_not_connected',
+                        'detail': 'Connect via /google/oauth/start first'}), 401
+    data = request.get_json(silent=True) or {}
+    try:
+        config = session_worker.SessionConfig.from_dict(data)
+    except ValueError as e:
+        return jsonify({'error': 'bad_config', 'detail': str(e)}), 400
+    if config.edit:
+        try:
+            topaz.resolve_binary()
+        except Exception as e:
+            return jsonify({'error': 'topaz_unavailable', 'detail': str(e)}), 400
+    try:
+        session_worker.start_worker(config, mgr.get_access_token)
+    except RuntimeError as e:
+        return jsonify({'error': 'already_running', 'detail': str(e)}), 409
+    return jsonify({'ok': True, 'status': session_worker.worker_status()})
+
+
+@app.post('/autonomous/stop')
+def autonomous_stop():
+    stopped = session_worker.stop_worker()
+    return jsonify({'ok': True, 'stopped': stopped})
+
+
+@app.get('/autonomous/status')
+def autonomous_status():
+    return jsonify(session_worker.worker_status())
 
 
 @app.route('/', defaults={'path': ''})
