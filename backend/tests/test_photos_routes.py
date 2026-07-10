@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 os.environ.setdefault('BBP_DEBUG', '1')
 
 import app as appmod
-from backend import google_photos
+from backend import google_auth, google_photos
 
 
 def _client_with_token():
@@ -20,12 +20,33 @@ def _client_with_token():
 
 
 def test_albums_requires_google_auth():
-    appmod.app.config['TESTING'] = True
-    c = appmod.app.test_client()
-    with c.session_transaction() as s:
-        s['user'] = {'email': 'dev@local'}
-    r = c.get('/photos/albums')
-    assert r.status_code == 401
+    """Returns 401 when no Google auth is available (neither manager nor session token)."""
+    # Patch the manager to be unavailable regardless of disk state
+    orig_environ = dict(os.environ)
+    os.environ.pop('GOOGLE_CLIENT_SECRET', None)
+    try:
+        google_auth._MANAGER = None  # force re-init on next get_manager()
+    except AttributeError:
+        pass
+
+    class _Unavailable:
+        def available(self): return False
+        def get_access_token(self): raise google_auth.GoogleAuthError('no creds')
+
+    orig_get_manager = google_auth.get_manager
+    google_auth.get_manager = lambda: _Unavailable()
+
+    try:
+        appmod.app.config['TESTING'] = True
+        c = appmod.app.test_client()
+        with c.session_transaction() as s:
+            s['user'] = {'email': 'dev@local'}
+        r = c.get('/photos/albums')
+        assert r.status_code == 401, f'expected 401 got {r.status_code}: {r.get_data(as_text=True)}'
+    finally:
+        google_auth.get_manager = orig_get_manager
+        os.environ.clear()
+        os.environ.update(orig_environ)
 
 
 def test_list_albums_route():
