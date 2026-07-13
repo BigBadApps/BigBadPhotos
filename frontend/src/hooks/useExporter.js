@@ -179,8 +179,7 @@ export function useExporter() {
           }
         }
 
-        for (let i = 0; i < queue.length; i++) {
-          const photo = queue[i]
+        await Promise.all(queue.map(async (photo) => {
           try {
             const convertToJpeg = fileFormat === 'jpg' && !photo.isRaw
             const exportName = convertToJpeg
@@ -191,12 +190,12 @@ export function useExporter() {
             const writable = await fileHandle.createWritable()
             await writable.write(blob)
             await writable.close()
-            setExportedCount(i + 1)
+            setExportedCount(prev => prev + 1)
           } catch (err) {
             failed.push({ filename: photo.filename, reason: err.message })
-            setExportedCount(i + 1)
+            setExportedCount(prev => prev + 1)
           }
-        }
+        }))
 
         try {
           const fileHandle = await exportDir.getFileHandle('bigbad_decisions.json', { create: true })
