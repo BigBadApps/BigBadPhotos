@@ -1,3 +1,4 @@
+import { getCsrfHeaders } from './csrf';
 const GIS_SRC = 'https://accounts.google.com/gsi/client'
 const DRIVE_OAUTH_PENDING_KEY = 'bbp_drive_oauth_pending'
 
@@ -254,9 +255,13 @@ export async function resumeDriveRedirectIfNeeded() {
 
 export async function authorizeDriveToken(accessToken) {
   const res = await fetch('/drive/authorize', {
+    headers: {
+      'Content-Type': 'application/json',
+      ...getCsrfHeaders()
+    },
     method: 'POST',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    // original headers replaced by csrf patch
     body: JSON.stringify({ accessToken }),
   })
   if (!res.ok) {
@@ -348,6 +353,7 @@ export async function uploadDriveFile(parentId, file) {
   let res
   try {
     res = await fetch('/drive/files', {
+      headers: getCsrfHeaders(),
       method: 'POST',
       credentials: 'include',
       body: form,
