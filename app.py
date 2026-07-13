@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, send_from_directory, session
+from flask_wtf.csrf import CSRFProtect, generate_csrf
 import cv2
 import numpy as np
 import json
@@ -21,6 +22,7 @@ except ImportError:
     pass
 
 app = Flask(__name__)
+csrf = CSRFProtect(app)
 
 FRONTEND_DIST = os.path.join(os.path.dirname(__file__), 'frontend', 'dist')
 
@@ -66,6 +68,18 @@ if not ALLOWED_EMAILS:
 
 
 API_ROUTES = {'/analyze', '/rank'}
+
+
+@app.after_request
+def set_csrf_cookie(response):
+    response.set_cookie(
+        'csrf_token',
+        generate_csrf(),
+        secure=not IS_DEBUG,
+        samesite='Lax',
+        httponly=False
+    )
+    return response
 
 @app.before_request
 def enforce_auth():

@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { useStore } from '../store'
+import { getCsrfHeaders } from '../utils/csrf';
 export default function TopAppBar() {
   const navigate  = useNavigate()
   const photos    = useStore(s => s.photos)
@@ -15,7 +16,7 @@ export default function TopAppBar() {
 
   const handleLogout = async () => {
     try {
-      await fetch('/auth/logout', { method: 'POST' })
+      await fetch('/auth/logout', { method: 'POST', headers: getCsrfHeaders() })
     } finally {
       if (window.google?.accounts?.id) {
         window.google.accounts.id.disableAutoSelect()
