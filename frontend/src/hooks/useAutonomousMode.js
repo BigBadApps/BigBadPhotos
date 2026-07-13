@@ -198,7 +198,7 @@ export function useAutonomousMode({ sourceDir, destDir, threshold }) {
       f => !f.name.endsWith(SIDECAR_SUFFIX)
     )
 
-    const unprocessed = []
+    const filesToDownload = []
     for (const f of imageFiles) {
       if (processedFilenames.current.has(f.name)) continue
       if (existingSidecars.has(sidecarFileName(f.name))) {
@@ -206,15 +206,28 @@ export function useAutonomousMode({ sourceDir, destDir, threshold }) {
         processedFilenames.current.add(f.name)
         continue
       }
-      try {
-        const file = await downloadDriveFile(f.id, { name: f.name, mimeType: f.mimeType })
-        const ext = file.name.split('.').pop().toLowerCase()
-        if (WEB_FORMATS.has(ext) || RAW_FORMATS.has(ext)) {
-          unprocessed.push({ id: f.id, filename: f.name, file })
+      filesToDownload.push(f)
+    }
+
+    const unprocessed = []
+    // Process downloads in chunks of 10
+    for (let i = 0; i < filesToDownload.length; i += 10) {
+      if (cancelledRef.current) break
+      const chunk = filesToDownload.slice(i, i + 10)
+      const chunkResults = await Promise.all(chunk.map(async (f) => {
+        try {
+          const file = await downloadDriveFile(f.id, { name: f.name, mimeType: f.mimeType })
+          const ext = file.name.split('.').pop().toLowerCase()
+          if (WEB_FORMATS.has(ext) || RAW_FORMATS.has(ext)) {
+            return { id: f.id, filename: f.name, file }
+          }
+        } catch (err) {
+          addError(`Download failed for ${f.name}: ${err.message}`)
         }
-      } catch (err) {
-        addError(`Download failed for ${f.name}: ${err.message}`)
-      }
+        return null
+      }))
+
+      unprocessed.push(...chunkResults.filter(Boolean))
     }
     return unprocessed
   }
