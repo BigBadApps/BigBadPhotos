@@ -174,7 +174,7 @@ def auth_password():
     if not pwd:
         return jsonify({'error': 'password_auth_not_configured'}), 400
     data = request.get_json(silent=True) or {}
-    if data.get('password') != pwd:
+    if not secrets.compare_digest(str(data.get('password', '')), pwd):
         return jsonify({'error': 'invalid_password'}), 401
     session['user'] = {
         'email': 'local@bigbadphotos',
