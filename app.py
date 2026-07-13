@@ -24,9 +24,14 @@ app = Flask(__name__)
 
 FRONTEND_DIST = os.path.join(os.path.dirname(__file__), 'frontend', 'dist')
 
-# In production, set FLASK_SECRET_KEY (e.g. on Railway) so sessions survive deploys/restarts.
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', secrets.token_hex(32))
 IS_DEBUG = (os.environ.get('FLASK_DEBUG') == '1') or (os.environ.get('BBP_DEBUG') == '1')
+
+# In production, set FLASK_SECRET_KEY (e.g. on Railway) so sessions survive deploys/restarts.
+app.secret_key = os.environ.get('FLASK_SECRET_KEY')
+if not IS_DEBUG and not app.secret_key:
+    raise ValueError("FLASK_SECRET_KEY environment variable is required in production.")
+if not app.secret_key:
+    app.secret_key = secrets.token_hex(32)
 app.config.update(
     SESSION_COOKIE_SECURE=not IS_DEBUG,
     SESSION_COOKIE_HTTPONLY=True,
