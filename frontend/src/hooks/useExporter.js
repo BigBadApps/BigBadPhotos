@@ -96,28 +96,38 @@ export function useExporter() {
     try {
       if (driveDest) {
         await ensureDriveWriteSession()
-        for (let i = 0; i < queue.length; i++) {
-          const photo = queue[i]
-          try {
-            const convertToJpeg = fileFormat === 'jpg' && !photo.isRaw
-            const exportName = convertToJpeg
-              ? photo.filename.replace(/\.[^.]+$/, '.jpg')
-              : photo.filename
-            const blob = convertToJpeg ? await encodeAsJpeg(photo.file) : photo.file
-            const file = blob instanceof File
-              ? new File([blob], exportName, { type: blob.type || 'application/octet-stream' })
-              : new File([blob], exportName, { type: blob.type || 'application/octet-stream' })
-            await uploadDriveFile(driveDest, file)
-            setExportedCount(i + 1)
-          } catch (err) {
-            failed.push({ filename: photo.filename, reason: err.message })
-            setExportedCount(i + 1)
-            if (isDriveExportAbortError(err)) {
-              setExportError(err.message)
-              driveBackendDown = true
-              break
+        let currentCount = 0
+        const CHUNK_SIZE = 5
+
+        for (let i = 0; i < queue.length; i += CHUNK_SIZE) {
+          if (driveBackendDown) break
+
+          const chunk = queue.slice(i, i + CHUNK_SIZE)
+          await Promise.all(chunk.map(async (photo) => {
+            if (driveBackendDown) return
+
+            try {
+              const convertToJpeg = fileFormat === 'jpg' && !photo.isRaw
+              const exportName = convertToJpeg
+                ? photo.filename.replace(/\.[^.]+$/, '.jpg')
+                : photo.filename
+              const blob = convertToJpeg ? await encodeAsJpeg(photo.file) : photo.file
+              const file = blob instanceof File
+                ? new File([blob], exportName, { type: blob.type || 'application/octet-stream' })
+                : new File([blob], exportName, { type: blob.type || 'application/octet-stream' })
+              await uploadDriveFile(driveDest, file)
+              currentCount++
+              setExportedCount(currentCount)
+            } catch (err) {
+              failed.push({ filename: photo.filename, reason: err.message })
+              currentCount++
+              setExportedCount(currentCount)
+              if (isDriveExportAbortError(err)) {
+                setExportError(err.message)
+                driveBackendDown = true
+              }
             }
-          }
+          }))
         }
 
         if (!driveBackendDown) {
