@@ -8,7 +8,7 @@ import gc
 import secrets
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from typing import Dict, List, Tuple
+from typing import List
 from backend import google_drive
 
 try:
