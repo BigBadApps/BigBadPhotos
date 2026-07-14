@@ -44,18 +44,7 @@ export function isDriveBackendUnavailable(error) {
 }
 
 export function isDriveExportAbortError(error) {
-  if (isDriveBackendUnavailable(error)) return true
-  const message = (error?.message || '').toLowerCase()
-  return (
-    message.includes('drive_upload_failed')
-    || message.includes('insufficient permission')
-    || message.includes('insufficient authentication')
-    || message.includes('invalid credentials')
-    || message.includes('access denied')
-    || message.includes('unauthorized')
-    || message.includes('forbidden')
-    || message.includes('scope')
-  )
+  return error?.name === 'AbortError' || error?.message?.includes('Abort')
 }
 
 function isRetryableSilentAuthError(error) {
