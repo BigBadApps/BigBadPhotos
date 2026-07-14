@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import Icon from './Icon';
 import { useStore } from '../store';
+import { getCsrfHeaders } from '../utils/csrf';
 
 function GoogleMark({ size = 20 }) {
   return (
@@ -35,8 +36,12 @@ function AuthGate({ onAuthed, authConfig }) {
     setHint('Verifying…');
     try {
       const res = await fetch('/auth/password', {
+        headers: {
+          'Content-Type': 'application/json',
+          ...getCsrfHeaders()
+        },
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // Headers replaced above
         body: JSON.stringify({ password }),
       });
       const data = await res.json();
@@ -71,7 +76,7 @@ function AuthGate({ onAuthed, authConfig }) {
     setState('loading');
     setHint('Dev mode — entering workspace…');
     try {
-      const res = await fetch('/auth/dev', { method: 'POST', credentials: 'include' });
+      const res = await fetch('/auth/dev', { method: 'POST', credentials: 'include', headers: getCsrfHeaders() });
       if (!res.ok) {
         setState('error');
         setHint('Dev sign-in failed. Check that BBP_DEBUG=1 is set on the server.');

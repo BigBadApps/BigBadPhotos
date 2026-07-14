@@ -1,3 +1,4 @@
+import { getCsrfHeaders } from '../utils/csrf';
 // Relative URLs — works on localhost (proxied by Vite) and on the Tailscale HTTPS hostname.
 export async function checkHealth() {
   const res = await fetch('/health')
@@ -33,7 +34,7 @@ export async function rankPhotos(photos) {
     formData.append(photo.id, photo.file, photo.filename)
   }
 
-  const res = await fetch('/rank', { method: 'POST', body: formData, credentials: 'include' })
+  const res = await fetch('/rank', { method: 'POST', body: formData, credentials: 'include', headers: getCsrfHeaders() })
   let body = {}
   try {
     body = await res.json()
