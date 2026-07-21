@@ -8,7 +8,7 @@ Camera config (R6 Mark II):
   Login: BBP_FTP_USER / BBP_FTP_PASS
   (Anonymous login is intentionally NOT used — see spec decisions in HANDOFF)
 """
-from pyftpdlib.handlers import FTPHandler
+from pyftpdlib.handlers import FTPHandler, TLS_FTPHandler
 from pyftpdlib.servers import FTPServer
 from pyftpdlib.authorizers import DummyAuthorizer
 import os, threading, logging
@@ -22,7 +22,22 @@ def start_ftp_thread(root: str, port: int, user: str, password: str):
     authorizer = DummyAuthorizer()
     authorizer.add_user(user, password, root, perm='elradfmwMT')
 
-    handler = FTPHandler
+    cert = os.environ.get('BBP_CERT')
+    key = os.environ.get('BBP_KEY')
+
+    if cert:
+        logger.info("FTP ingest using TLS encryption")
+        handler = TLS_FTPHandler
+        handler.certfile = cert
+        if key:
+            handler.keyfile = key
+        handler.tls_control_required = True
+        handler.tls_data_required = True
+    else:
+        logger.warning("SECURITY WARNING: FTP ingest starting without TLS encryption. "
+                       "Credentials and data will be transmitted in clear text.")
+        handler = FTPHandler
+
     handler.authorizer = authorizer
     handler.passive_ports = range(60000, 60100)
 
