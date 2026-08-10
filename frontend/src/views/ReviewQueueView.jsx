@@ -1,58 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Icon from '../components/Icon';
-import { getCsrfHeaders } from '../utils/csrf';
-
-// TODO(P7): replace with sessionsClient
-// Minimal fetch wrappers for the sessions API. The reviewer collapses these into
-// `sessionsClient.{listPhotos, decide, approveAll}` once P07 lands.
-async function activeRun() {
-  const res = await fetch('/runs/active', { credentials: 'include' });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || body.error || `Could not reach the session API (HTTP ${res.status})`);
-  }
-  return res.json();
-}
-
-// TODO(P7): replace with sessionsClient
-async function listPhotos(runId) {
-  const res = await fetch(`/runs/${runId}/photos?state=awaiting_review`, { credentials: 'include' });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || body.error || `Could not load the review queue (HTTP ${res.status})`);
-  }
-  const data = await res.json();
-  return Array.isArray(data.photos) ? data.photos : [];
-}
-
-// TODO(P7): replace with sessionsClient
-async function decide(photoId, decision) {
-  const res = await fetch(`/photos/${photoId}/decision`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...getCsrfHeaders() },
-    body: JSON.stringify({ decision }),
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || body.error || `Decision failed (HTTP ${res.status})`);
-  }
-  return res.json();
-}
-
-// TODO(P7): replace with sessionsClient
-async function approveAll(runId) {
-  const res = await fetch(`/runs/${runId}/approve-all`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...getCsrfHeaders() },
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || body.error || `Approve all failed (HTTP ${res.status})`);
-  }
-  return res.json();
-}
+import * as sessionsClient from '../api/sessionsClient';
 
 function scoreColor(score) {
   return score >= 0.75 ? 'var(--keep)' : score >= 0.5 ? 'var(--warning)' : 'var(--reject)';
@@ -189,7 +137,8 @@ export default function ReviewQueueView() {
   const refreshPhotos = useCallback(async (rid) => {
     setLoadingPhotos(true);
     try {
-      const ps = await listPhotos(rid);
+      const data = await sessionsClient.listPhotos(rid, { state: 'awaiting_review' });
+      const ps = Array.isArray(data.photos) ? data.photos : [];
       setPhotos(ps);
       setSelectedId((prev) => (prev != null && ps.some((p) => p.id === prev) ? prev : (ps[0]?.id ?? null)));
     } catch (err) {
@@ -203,7 +152,7 @@ export default function ReviewQueueView() {
     if (initial) setStatus('loading');
     setError(null);
     try {
-      const st = await activeRun();
+      const st = await sessionsClient.activeRun();
       if (!st.running || st.runId == null) {
         setStatus('no-run');
         setRunId(null);
@@ -245,7 +194,7 @@ export default function ReviewQueueView() {
     setPhotos((ps) => ps.filter((p) => p.id !== photo.id)); // optimistic removal
     setSelectedId((prev) => (prev === photo.id ? nextId : prev)); // advance the lightbox in place
     try {
-      await decide(photo.id, decision);
+      await sessionsClient.decide(photo.id, decision);
       showToast(decision === 'keep' ? 'Kept' : 'Rejected');
     } catch (err) {
       setPhotos(prevPhotos); // rollback to the exact snapshot
@@ -262,7 +211,7 @@ export default function ReviewQueueView() {
     const prevPhotos = photosRef.current; // snapshot before the bulk clear
     setPhotos([]); // optimistic: the whole queue clears instantly
     try {
-      const { count } = await approveAll(runId);
+      const { count } = await sessionsClient.approveAll(runId);
       setConfirmApprove(false);
       showToast(`Approved ${count} photo${count === 1 ? '' : 's'}`);
     } catch (err) {
