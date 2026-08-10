@@ -1,0 +1,24 @@
+# MediaPipe sidecar venv — used ONLY by backend/mediapipe_eyes.py, which runs
+# under its own Python 3.12 venv and is invoked as a subprocess by
+# backend/scoring.py (see BBP_MEDIAPIPE_PYTHON). It is NOT installed into the
+# main .venv: mediapipe 1.0.0 pulls opencv-contrib-python (OpenCV 5.x), which
+# overwrites the repo-pinned opencv-python-headless 4.10.0 cv2 package.
+#
+# Create the venv and install (one-time, from repo root):
+#   python3.12 -m venv .venv-mediapipe
+#   .venv-mediapipe/bin/pip install -r requirements-mediapipe.txt
+#
+# The FaceLandmarker .task model is not shipped in the wheel — download it once:
+#   mkdir -p .venv-mediapipe/models
+#   curl -L -o .venv-mediapipe/models/face_landmarker.task \
+#     https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
+#
+# Note: mediapipe 1.0.0 depends on opencv-contrib-python (5.x), which already
+# provides the only cv2 functions the sidecar needs (imdecode/cvtColor). We do
+# NOT install opencv-python-headless here — that would give two wheels owning
+# the same cv2 package inside this venv. This venv is fully isolated from the
+# main .venv, which keeps its pinned opencv-python-headless 4.10.0.
+#
+# A missing/broken sidecar venv is safe: scoring falls back to Haar cascades.
+mediapipe==1.0.0
+numpy==2.2.6

@@ -4,15 +4,154 @@ byte-identical to the pre-extraction /rank endpoint."""
 from __future__ import annotations
 
 import gc
+import json
+import logging
+import math
 import os
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from typing import List
 
 import cv2
 import numpy as np
 
+logger = logging.getLogger(__name__)
+
 FACE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 EYE_CASCADE  = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+
+# ---------------------------------------------------------------------------
+# MediaPipe FaceMesh eye-open/closed detection (subprocess sidecar)
+# ---------------------------------------------------------------------------
+# MediaPipe 1.0.0 cannot be imported in the main `.venv` (its opencv-contrib
+# dependency overwrites the pinned opencv-python-headless), so it runs under a
+# dedicated `.venv-mediapipe` (Python 3.12) and is invoked like an external
+# tool — the same subprocess discipline `backend/topaz.py` uses. The sidecar
+# returns normalized eye landmarks; the EAR math + open/closed decision live
+# here so they are deterministically testable via injected fake landmark sets.
+
+# EAR above this ⇒ eye open. Open eyes typically 0.30–0.43, closed <0.20;
+# 0.25 is the midpoint of the commonly-used 0.2–0.3 range for MediaPipe.
+EAR_OPEN_THRESHOLD = 0.25
+
+# Subprocess timeout for the sidecar (model load + inference, generous).
+MEDIAPIPE_TIMEOUT_S = 30.0
+
+# Log the "mediapipe unavailable → Haar fallback" warning once per process,
+# not once per image in a batch.
+_mediapipe_fallback_warned = False
+
+
+def _mediapipe_available() -> bool:
+    """True when the sidecar interpreter exists (skip color decode otherwise)."""
+    return os.path.isfile(_resolve_mediapipe_python())
+
+
+def _resolve_mediapipe_python() -> str:
+    """Sidecar interpreter: $BBP_MEDIAPIPE_PYTHON or repo-root .venv-mediapipe."""
+    explicit = os.environ.get('BBP_MEDIAPIPE_PYTHON')
+    if explicit:
+        return explicit
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(repo_root, '.venv-mediapipe', 'bin', 'python')
+
+
+def _eye_aspect_ratio(points) -> float:
+    """
+    EAR for one eye from 6 (x, y) points in p1..p6 order:
+    outer corner, top-outer, top-inner, inner corner, bottom-inner, bottom-outer.
+    EAR = (dist(p2,p6) + dist(p3,p5)) / (2 * dist(p1,p4)).
+    Degenerate/missing input → 0.0 (treated as closed).
+    """
+    if not points or len(points) != 6:
+        return 0.0
+    p1, p2, p3, p4, p5, p6 = points
+
+    def dist(a, b):
+        return math.hypot(a[0] - b[0], a[1] - b[1])
+
+    corner_dist = dist(p1, p4)
+    if corner_dist <= 1e-9:
+        return 0.0
+    return (dist(p2, p6) + dist(p3, p5)) / (2.0 * corner_dist)
+
+
+def _run_mediapipe_sidecar(bgr: np.ndarray) -> dict:
+    """
+    Run backend/mediapipe_eyes.py under the sidecar venv; return its JSON dict.
+    Raises on any failure so score_faces can fall back to Haar.
+    """
+    interpreter = _resolve_mediapipe_python()
+    if not os.path.isfile(interpreter):
+        raise FileNotFoundError(f'mediapipe interpreter not found: {interpreter}')
+
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mediapipe_eyes.py')
+    if not os.path.isfile(script):
+        raise FileNotFoundError(f'mediapipe sidecar script not found: {script}')
+
+    ok, buf = cv2.imencode('.jpg', bgr)
+    if not ok:
+        raise ValueError('cv2.imencode failed')
+
+    proc = subprocess.run(
+        [interpreter, script],
+        input=buf.tobytes(),
+        capture_output=True,
+        timeout=MEDIAPIPE_TIMEOUT_S,
+        shell=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f'mediapipe sidecar exited {proc.returncode}: '
+                           f'{proc.stderr.decode("utf-8", "replace")[-300:]}')
+    try:
+        return json.loads(proc.stdout.decode('utf-8', 'replace'))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f'mediapipe sidecar returned invalid JSON: {exc}') from exc
+
+
+def _score_faces_from_mediapipe(data: dict) -> dict:
+    """Turn a sidecar payload into the subject dict (EAR math + decision)."""
+    if not isinstance(data, dict) or not data.get('ok') or not isinstance(data.get('faces'), list):
+        raise ValueError('unexpected mediapipe payload shape')
+    faces = data['faces']
+    if not faces:
+        return {
+            "face_count": 0,
+            "eyes_open": None,
+            "subject_score": None,
+            "primary_face_box": None,
+        }
+
+    face_count = len(faces)
+    any_eyes_open = False
+    primary_face_box = None
+    best_area = -1.0
+    for f in faces:
+        left_eye = f.get('left_eye')
+        right_eye = f.get('right_eye')
+        # Validate the per-face shape: a renamed/missing eye key must fall back
+        # to Haar, never silently mark every eye closed and halve batch scores.
+        if (not isinstance(left_eye, list) or len(left_eye) != 6 or
+                not isinstance(right_eye, list) or len(right_eye) != 6):
+            raise ValueError('face missing 6-point eye landmarks')
+        left_ear = _eye_aspect_ratio(left_eye)
+        right_ear = _eye_aspect_ratio(right_eye)
+        if left_ear > EAR_OPEN_THRESHOLD and right_ear > EAR_OPEN_THRESHOLD:
+            any_eyes_open = True
+        box = f.get('box')
+        if box:
+            area = box.get('w', 0) * box.get('h', 0)
+            if area > best_area:
+                best_area = area
+                primary_face_box = box
+
+    subject_score = 1.0 if any_eyes_open else 0.4
+    return {
+        "face_count": face_count,
+        "eyes_open": any_eyes_open,
+        "subject_score": round(subject_score, 4),
+        "primary_face_box": primary_face_box,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -37,6 +176,26 @@ def decode_image(img_bytes: bytes) -> np.ndarray:
         scale = MAX_SCORING_DIM / max(h, w)
         gray = cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
     return gray
+
+
+def decode_image_color(img_bytes: bytes) -> np.ndarray:
+    """
+    Decode JPEG/PNG bytes → BGR color, capped at MAX_SCORING_DIM.
+    MediaPipe FaceMesh needs color pixels; everything else in this file
+    keeps using the grayscale array unchanged.
+    Raises ValueError if decode fails.
+    """
+    if not img_bytes or len(img_bytes) < 32:
+        raise ValueError(f"empty or truncated upload ({len(img_bytes) if img_bytes else 0} bytes)")
+    arr = np.frombuffer(img_bytes, dtype=np.uint8)
+    bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if bgr is None:
+        raise ValueError("cv2.imdecode returned None — not a valid image")
+    h, w = bgr.shape[:2]
+    if max(h, w) > MAX_SCORING_DIM:
+        scale = MAX_SCORING_DIM / max(h, w)
+        bgr = cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    return bgr
 
 
 # ---------------------------------------------------------------------------
@@ -110,9 +269,9 @@ def score_contrast(gray: np.ndarray) -> dict:
     }
 
 
-def score_faces(gray: np.ndarray) -> dict:
+def _score_faces_haar(gray: np.ndarray) -> dict:
     """
-    Face + eye detection via Haar cascades.
+    Face + eye detection via Haar cascades (private fallback).
 
     Downscales to max 800px for speed.
     Returns face_count, eyes_open, subject_score, and primary_face_box
@@ -163,6 +322,32 @@ def score_faces(gray: np.ndarray) -> dict:
         "subject_score":    round(subject_score, 4),
         "primary_face_box": primary_face_box,
     }
+
+
+def score_faces(gray: np.ndarray,
+                bgr: np.ndarray | None = None,
+                deps: dict | None = None) -> dict:
+    """
+    Face + eye detection. Primary path is MediaPipe FaceMesh (EAR-based, via
+    subprocess sidecar); any failure degrades to the Haar-cascade fallback.
+
+    `bgr` is the color image MediaPipe needs — callers that only have grayscale
+    pass nothing and get the Haar path directly. `deps` accepts an injected
+    `mediapipe_runner` (mirroring pipeline.py/preflight.py) so tests can feed
+    fake landmark sets without touching the interpreter/subprocess.
+    """
+    deps = deps or {}
+    if bgr is not None:
+        runner = deps.get('mediapipe_runner', _run_mediapipe_sidecar)
+        try:
+            payload = runner(bgr)
+            return _score_faces_from_mediapipe(payload)
+        except Exception as exc:  # noqa: BLE001 — degrade, never raise
+            global _mediapipe_fallback_warned
+            if not _mediapipe_fallback_warned:
+                _mediapipe_fallback_warned = True
+                logger.warning('MediaPipe face detection unavailable (%s); using Haar fallback', exc)
+    return _score_faces_haar(gray)
 
 
 def compute_phash(gray: np.ndarray) -> int:
@@ -277,15 +462,23 @@ def composite_score(sharpness: float, exposure: float,
 # ---------------------------------------------------------------------------
 
 def rank_images(tasks: list[tuple[str, str, bytes]],
-                max_workers: int | None = None) -> tuple[list[dict], list[dict]]:
-    """Score a batch of (id, filename, jpeg_bytes); returns (results, ranking_errors)."""
+                max_workers: int | None = None,
+                deps: dict | None = None) -> tuple[list[dict], list[dict]]:
+    """Score a batch of (id, filename, jpeg_bytes); returns (results, ranking_errors).
+
+    `deps` (optional, test-only) is passed through to score_faces so tests can
+    inject a fake mediapipe runner without touching the real subprocess.
+    """
     raw_results: List[dict] = []
 
     def process_image(task):
         t_id, t_filename, t_bytes = task
         try:
             gray = decode_image(t_bytes)
-            subj = score_faces(gray)
+            # Only pay for a second (color) decode when the sidecar is present;
+            # machines without it keep the single-decode grayscale path.
+            bgr = decode_image_color(t_bytes) if _mediapipe_available() else None
+            subj = score_faces(gray, bgr, deps)
             res = {
                 "id":           t_id,
                 "filename":     t_filename,
@@ -299,6 +492,7 @@ def rank_images(tasks: list[tuple[str, str, bytes]],
             }
             # Explicit cleanup
             del gray
+            del bgr
             return res
         except Exception as exc:
             return {"error": str(exc), "id": t_id, "filename": t_filename}

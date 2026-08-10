@@ -40,6 +40,7 @@ The combination of zustand 4.4.0 + React 19 + Vite 8 dev server may produce an E
 - `GOOGLE_CLIENT_ID` / `BBP_ALLOWED_EMAILS` — optional, for real Google auth
 - `FLASK_SECRET_KEY` — optional, auto-generated if unset
 - Local Python: `python3.12 -m venv .venv` + `pip install -r requirements.txt` (`.venv/` is gitignored)
+- **MediaPipe eye detection sidecar** (`.venv-mediapipe/`, gitignored): `backend/scoring.py` calls `backend/mediapipe_eyes.py` as a subprocess for EAR-based eye-open detection; any failure falls back to Haar cascades. MediaPipe must stay out of the main `.venv` (it pulls opencv-contrib-python 5.x which overwrites the pinned opencv-python-headless). Recreate with: `python3.12 -m venv .venv-mediapipe && .venv-mediapipe/bin/pip install -r requirements-mediapipe.txt`, then download the model per that file's comments. Override the interpreter path with `BBP_MEDIAPIPE_PYTHON`.
 
 ### Node version
 
