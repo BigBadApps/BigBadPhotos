@@ -44,13 +44,21 @@ class DriveHTTPError(Exception):
 
 
 class FakeDrive:
-    """In-memory Drive. files: {name: bytes}; every call is recorded."""
+    """In-memory Drive. files: {name: bytes}; every call is recorded.
+
+    `_parents` tracks which folder each named file (by upload/original
+    filename, or `<name>.bbp.json` sidecar name) currently lives in, so
+    `find_child_by_name` can answer honestly — this is what makes the
+    idempotent-retry behavior in `_export`/`_archive` actually testable.
+    """
 
     def __init__(self, files):
         self.files = dict(files)
         self.uploads = []       # (parent_id, filename, bytes)
         self.moves = []         # (file_id, new_parent_id, old_parent_id)
         self.ensure_calls = []  # (parent_id, name)
+        self.find_calls = []    # (parent_id, name)
+        self._parents = {}      # name -> current parent_id
 
     def list_all(self, token, folder_id):
         return [{'id': f'id-{n}', 'name': n, 'mimeType': 'image/jpeg'}
@@ -62,6 +70,7 @@ class FakeDrive:
 
     def upload_file(self, token, parent_id, filename, data, mime_type=None):
         self.uploads.append((parent_id, filename, data))
+        self._parents[filename] = parent_id
         return {'id': f'id-{filename}'}
 
     def ensure_folder(self, token, parent_id, name):
@@ -70,7 +79,15 @@ class FakeDrive:
 
     def move_file(self, token, file_id, new_parent_id, old_parent_id=None):
         self.moves.append((file_id, new_parent_id, old_parent_id))
+        name = file_id[len('id-'):] if file_id.startswith('id-') else file_id
+        self._parents[name] = new_parent_id
         return {'id': file_id}
+
+    def find_child_by_name(self, token, parent_id, name, folders_only=False):
+        self.find_calls.append((parent_id, name))
+        if self._parents.get(name) == parent_id:
+            return {'id': f'id-{name}', 'name': name}
+        return None
 
 
 class UploadFailing(FakeDrive):
@@ -536,3 +553,116 @@ def test_stop_run_returns_false_when_nothing_running(monkeypatch):
     pipeline.start_run(s['id'], lambda: 'TOK')
     assert pipeline.stop_run() is True
     assert pipeline.stop_run() is False
+
+
+# -- review fixes: idempotent Drive retries, decisions blocked on inactive runs --
+
+class FlakyExportDrive(FakeDrive):
+    """The first upload_file call raises a transient (500) error, but only
+    after Drive has already "created" the file — simulating a lost response,
+    not a lost request. A second call would prove the idempotency check
+    failed (it should discover the file via find_child_by_name instead)."""
+
+    def __init__(self, files):
+        super().__init__(files)
+        self.upload_attempts = 0
+
+    def upload_file(self, token, parent_id, filename, data, mime_type=None):
+        if filename.endswith('.bbp.json'):
+            # The archive step's sidecar upload is a separate, unrelated
+            # call — only the original export upload is flaky here.
+            return super().upload_file(token, parent_id, filename, data, mime_type)
+        self.upload_attempts += 1
+        if self.upload_attempts == 1:
+            self._parents[filename] = parent_id
+            raise DriveHTTPError(500)
+        raise AssertionError(
+            'upload_file must not be called again once the file already '
+            'exists at the destination — find_child_by_name should have '
+            'found it on retry')
+
+
+def test_export_retry_after_lost_response_does_not_duplicate():
+    drive = FlakyExportDrive({'keep_1.jpg': _jpeg_bytes(1)})
+    s = _session(autonomous=True)
+    run_id = _run(s['id'])
+    pipe = _pipe(s, run_id, drive)
+    pipe.poll_once()  # upload "succeeds" server-side but raises 500 client-side
+    row = _rows(run_id)[0]
+    assert row['state'] == 'exporting'
+    assert row['attempts'] == 1
+    pipe.poll_once()  # retry: found via find_child_by_name, no second upload
+    row = _rows(run_id)[0]
+    assert row['state'] == 'archived'
+    assert row['exported_file_id'] == 'id-keep_1.jpg'
+    assert drive.upload_attempts == 1
+
+
+class FlakyArchiveDrive(FakeDrive):
+    """move_file always succeeds; the sidecar upload fails transiently once.
+    A correct retry must not re-move the (already-moved) original and must
+    not leave the row stuck without ever completing the sidecar."""
+
+    def __init__(self, files):
+        super().__init__(files)
+        self.move_calls = 0
+        self.sidecar_upload_attempts = 0
+
+    def move_file(self, token, file_id, new_parent_id, old_parent_id=None):
+        self.move_calls += 1
+        return super().move_file(token, file_id, new_parent_id, old_parent_id)
+
+    def upload_file(self, token, parent_id, filename, data, mime_type=None):
+        if filename.endswith('.bbp.json'):
+            self.sidecar_upload_attempts += 1
+            if self.sidecar_upload_attempts == 1:
+                raise DriveHTTPError(500)
+        return super().upload_file(token, parent_id, filename, data, mime_type)
+
+
+def test_archive_retry_after_sidecar_failure_does_not_remove_or_reupload():
+    # A low scorer skips edit/export and goes straight from gate to archive
+    # within the same poll — isolates the archive step cleanly.
+    drive = FlakyArchiveDrive({'skip_1.jpg': _jpeg_bytes(1)})
+    s = _session(autonomous=True)
+    run_id = _run(s['id'])
+    pipe = _pipe(s, run_id, drive)
+    pipe.poll_once()  # move succeeds; sidecar upload raises 500
+    row = _rows(run_id)[0]
+    assert row['state'] == 'rejected'
+    assert row['attempts'] == 1
+    assert drive.move_calls == 1
+    pipe.poll_once()  # retry: move_file NOT repeated; sidecar retried and succeeds
+    row = _rows(run_id)[0]
+    assert row['state'] == 'archived'
+    assert drive.move_calls == 1
+    assert drive.sidecar_upload_attempts == 2
+
+
+def test_apply_decision_raises_when_run_not_active():
+    drive = FakeDrive({'keep_1.jpg': _jpeg_bytes(1)})
+    s = _session(autonomous=False)
+    run_id = _run(s['id'])
+    _pipe(s, run_id, drive).poll_once()
+    row = _rows(run_id)[0]
+    assert row['state'] == 'awaiting_review'
+    conn = db.get()
+    conn.execute('UPDATE runs SET status = ? WHERE id = ?', ('stopped', run_id))
+    conn.commit()
+    with pytest.raises(pipeline.RunNotActive):
+        pipeline.apply_decision(row['id'], 'keep')
+    # must not have been silently approved-and-stranded
+    assert _rows(run_id)[0]['state'] == 'awaiting_review'
+
+
+def test_approve_all_raises_when_run_not_active():
+    drive = FakeDrive({'keep_1.jpg': _jpeg_bytes(1)})
+    s = _session(autonomous=False)
+    run_id = _run(s['id'])
+    _pipe(s, run_id, drive).poll_once()
+    conn = db.get()
+    conn.execute('UPDATE runs SET status = ? WHERE id = ?', ('stopped', run_id))
+    conn.commit()
+    with pytest.raises(pipeline.RunNotActive):
+        pipeline.approve_all(run_id)
+    assert _rows(run_id)[0]['state'] == 'awaiting_review'

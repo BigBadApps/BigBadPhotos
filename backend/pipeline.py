@@ -44,6 +44,12 @@ class RunConflict(RuntimeError):
     """Raised when start_run is called while another run is already active."""
 
 
+class RunNotActive(RuntimeError):
+    """Raised when a decision targets a run that isn't currently running —
+    accepting it would strand the photo in 'approved'/'rejected' with no
+    poll loop left to export or archive it."""
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
@@ -389,16 +395,28 @@ class Pipeline:
             if self._auth_error:
                 return
             try:
-                path = self._export_path(row)
-                with open(path, 'rb') as fh:
-                    data = fh.read()
-                created = self._drive.upload_file(
-                    token, self.session['exportFolderId'], row['filename'], data)
+                export_id = self._find_or_upload(
+                    token, self.session['exportFolderId'], row['filename'],
+                    lambda: self._export_path(row))
                 self._set_photo_state(
-                    row['id'], state='exported',
-                    exported_file_id=created.get('id'))
+                    row['id'], state='exported', exported_file_id=export_id)
             except Exception as exc:
                 self._handle_step_exception(row, exc, 'export_failed')
+
+    def _find_or_upload(self, token: str, parent_id: str, filename: str,
+                        path_fn, mime_type: str | None = None) -> str:
+        """Upload `filename` into `parent_id`, but first check whether a file
+        by that name already landed there — makes retries after a transient
+        failure (Drive created the file, but the response was lost) idempotent
+        instead of creating a duplicate on every retry."""
+        existing = self._drive.find_child_by_name(token, parent_id, filename)
+        if existing:
+            return existing['id']
+        path = path_fn()
+        with open(path, 'rb') as fh:
+            data = fh.read()
+        created = self._drive.upload_file(token, parent_id, filename, data, mime_type)
+        return created.get('id')
 
     # -- step 7: archive ---------------------------------------------------------
 
@@ -421,13 +439,23 @@ class Pipeline:
             if self._auth_error:
                 return
             try:
-                self._drive.move_file(
-                    token, row['drive_file_id'], archive_id,
-                    self.session['sourceFolderId'])
-                sidecar = self._build_sidecar(row)
-                self._drive.upload_file(
-                    token, archive_id, f"{row['filename']}{SIDECAR_SUFFIX}",
-                    json.dumps(sidecar).encode('utf-8'), 'application/json')
+                # Both the move and the sidecar upload are checked before
+                # acting, so a retry after a transient failure between them
+                # (move succeeds, sidecar upload times out) resumes cleanly
+                # instead of re-moving an already-archived file or uploading
+                # a second sidecar.
+                if not self._drive.find_child_by_name(
+                        token, archive_id, row['filename']):
+                    self._drive.move_file(
+                        token, row['drive_file_id'], archive_id,
+                        self.session['sourceFolderId'])
+                sidecar_name = f"{row['filename']}{SIDECAR_SUFFIX}"
+                if not self._drive.find_child_by_name(
+                        token, archive_id, sidecar_name):
+                    sidecar = self._build_sidecar(row)
+                    self._drive.upload_file(
+                        token, archive_id, sidecar_name,
+                        json.dumps(sidecar).encode('utf-8'), 'application/json')
                 self._set_photo_state(row['id'], state='archived')
             except Exception as exc:
                 self._handle_step_exception(row, exc, 'archive_failed')
@@ -648,14 +676,27 @@ def stop_run() -> bool:
     return True
 
 
+def _run_status(run_id: int) -> str | None:
+    row = db.get().execute(
+        'SELECT status FROM runs WHERE id = ?', (run_id,)).fetchone()
+    return row['status'] if row else None
+
+
 def apply_decision(photo_id: int, decision: str) -> dict:
-    """'keep' -> approved, 'reject' -> rejected. Returns the updated photo row."""
+    """'keep' -> approved, 'reject' -> rejected. Returns the updated photo row.
+
+    Raises RunNotActive if the photo's run isn't currently 'running' — an
+    inactive run has no poll loop left to pick up the approval and export or
+    archive it, which would strand the photo indefinitely."""
     if decision not in ('keep', 'reject'):
         raise ValueError(f"decision must be 'keep' or 'reject', got {decision!r}")
     conn = db.get()
     row = conn.execute('SELECT * FROM photos WHERE id = ?', (photo_id,)).fetchone()
     if row is None:
         raise KeyError(f'photo not found: {photo_id}')
+    if _run_status(row['run_id']) != 'running':
+        raise RunNotActive(
+            f"run {row['run_id']} is not active; resume it before deciding")
     new_state = 'approved' if decision == 'keep' else 'rejected'
     conn.execute(
         'UPDATE photos SET state = ?, updated_at = ? WHERE id = ?',
@@ -666,7 +707,12 @@ def apply_decision(photo_id: int, decision: str) -> dict:
 
 
 def approve_all(run_id: int) -> int:
-    """Bulk-approve every awaiting_review photo for the run; returns count moved."""
+    """Bulk-approve every awaiting_review photo for the run; returns count moved.
+
+    Raises RunNotActive if the run isn't currently 'running' — see
+    apply_decision for why an inactive run must not accept approvals."""
+    if _run_status(run_id) != 'running':
+        raise RunNotActive(f'run {run_id} is not active; resume it before approving')
     conn = db.get()
     cur = conn.execute(
         'UPDATE photos SET state = ?, updated_at = ?'

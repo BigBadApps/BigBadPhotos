@@ -648,7 +648,10 @@ def runs_approve_all(run_id):
     if run is None:
         return jsonify({'error': 'not_found',
                         'detail': f'run not found: {run_id}'}), 404
-    count = pipeline.approve_all(run_id)
+    try:
+        count = pipeline.approve_all(run_id)
+    except pipeline.RunNotActive as e:
+        return jsonify({'error': 'run_not_active', 'detail': str(e)}), 409
     return jsonify({'ok': True, 'count': count})
 
 
@@ -663,6 +666,8 @@ def photos_decision(photo_id):
                         'detail': f'photo not found: {photo_id}'}), 404
     except ValueError as e:
         return jsonify({'error': 'bad_config', 'detail': str(e)}), 400
+    except pipeline.RunNotActive as e:
+        return jsonify({'error': 'run_not_active', 'detail': str(e)}), 409
     return jsonify({'ok': True, 'photo': _photo_row_to_dict(row)})
 
 

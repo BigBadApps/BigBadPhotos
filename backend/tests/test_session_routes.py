@@ -330,6 +330,14 @@ def test_approve_all_unknown_run_404():
     assert r.get_json()['error'] == 'not_found'
 
 
+def test_approve_all_inactive_run_409():
+    c = _client()
+    run_id = _insert_run(_create_session(c), status='stopped')
+    r = c.post(f'/runs/{run_id}/approve-all')
+    assert r.status_code == 409
+    assert r.get_json()['error'] == 'run_not_active'
+
+
 # -- photo decisions -----------------------------------------------------------
 
 def test_decision_keep_via_real_pipeline():
@@ -364,6 +372,15 @@ def test_decision_unknown_photo_404():
     r = c.post('/photos/999/decision', json={'decision': 'keep'})
     assert r.status_code == 404
     assert r.get_json()['error'] == 'not_found'
+
+
+def test_decision_inactive_run_409():
+    c = _client()
+    run_id = _insert_run(_create_session(c), status='stopped')
+    row = _insert_photo(run_id)
+    r = c.post(f"/photos/{row['id']}/decision", json={'decision': 'keep'})
+    assert r.status_code == 409
+    assert r.get_json()['error'] == 'run_not_active'
 
 
 # -- thumbnail proxy -----------------------------------------------------------

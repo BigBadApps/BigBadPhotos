@@ -119,6 +119,11 @@ export default function ReviewQueueView() {
   // Serializes keep/reject/approve-all requests so a rollback snapshot is always
   // the committed queue: a failed request can never clobber an in-between decision.
   const inFlightRef = useRef(false);
+  // A P/R press that lands while a decision is in flight isn't dropped — it's
+  // remembered here and replayed the moment the in-flight one settles, so fast
+  // keyboard review never silently loses a keystroke. Most-recent-wins if
+  // several land in the same window (e.g. held-down key repeat).
+  const pendingDecisionRef = useRef(null);
   const toastTimerRef = useRef(null);
   // Mirror of `photos` kept in a ref so a stale closure (a handler created before
   // the last render committed) still snapshots the current committed queue.
@@ -184,8 +189,13 @@ export default function ReviewQueueView() {
   }, [status, photos.length, loadingPhotos, runId, refreshPhotos]);
 
   const handleDecision = useCallback(async (photo, decision) => {
-    if (inFlightRef.current) return;
+    if (inFlightRef.current) {
+      // Don't drop it — remember it and replay once the in-flight one settles.
+      pendingDecisionRef.current = { photo, decision };
+      return;
+    }
     inFlightRef.current = true;
+    pendingDecisionRef.current = null;
     const prevPhotos = photosRef.current; // snapshot of the committed queue before this decision
     const idx = prevPhotos.findIndex((p) => p.id === photo.id);
     const nextId = idx >= 0
@@ -201,6 +211,11 @@ export default function ReviewQueueView() {
       setError(err.message);
     } finally {
       inFlightRef.current = false;
+      const queued = pendingDecisionRef.current;
+      if (queued) {
+        pendingDecisionRef.current = null;
+        handleDecision(queued.photo, queued.decision);
+      }
     }
   }, [showToast]);
 
@@ -239,6 +254,7 @@ export default function ReviewQueueView() {
 
   useEffect(() => {
     function onKey(e) {
+      if (e.repeat) return;
       if (e.target?.tagName === 'INPUT' || e.target?.tagName === 'TEXTAREA') return;
       const k = e.key.toLowerCase();
       if (k === 'escape') { setSelectedId(null); setConfirmApprove(false); return; }
