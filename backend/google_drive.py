@@ -239,3 +239,109 @@ def _is_supported_image(name: str, mime: str) -> bool:
     if ext in IMAGE_EXTENSIONS:
         return True
     return mime.startswith('image/')
+
+
+def create_folder(access_token: str, parent_id: str, name: str) -> dict[str, Any]:
+    resp = requests.post(
+        f'{DRIVE_API}/files',
+        headers=_headers(access_token),
+        params={'fields': 'id,name', 'supportsAllDrives': 'true'},
+        json={
+            'name': name,
+            'mimeType': FOLDER_MIME,
+            'parents': [parent_id],
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return {'id': data.get('id'), 'name': data.get('name')}
+
+
+def find_child_by_name(
+    access_token: str,
+    parent_id: str,
+    name: str,
+    folders_only: bool = False,
+) -> dict[str, Any] | None:
+    escaped_name = name.replace("'", "\\'")
+    q = (
+        f"'{parent_id}' in parents and trashed = false "
+        f"and name = '{escaped_name}'"
+    )
+    if folders_only:
+        q += f" and mimeType = '{FOLDER_MIME}'"
+    resp = requests.get(
+        f'{DRIVE_API}/files',
+        headers=_headers(access_token),
+        params={
+            'q': q,
+            'fields': 'files(id,name,mimeType)',
+            'pageSize': 1,
+            'supportsAllDrives': 'true',
+            'includeItemsFromAllDrives': 'true',
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    files = resp.json().get('files', [])
+    return files[0] if files else None
+
+
+def ensure_folder(access_token: str, parent_id: str, name: str) -> dict[str, Any]:
+    found = find_child_by_name(access_token, parent_id, name, folders_only=True)
+    if found:
+        return found
+    return create_folder(access_token, parent_id, name)
+
+
+def move_file(
+    access_token: str,
+    file_id: str,
+    new_parent_id: str,
+    old_parent_id: str | None = None,
+) -> dict[str, Any]:
+    if old_parent_id is None:
+        meta = requests.get(
+            f'{DRIVE_API}/files/{file_id}',
+            headers=_headers(access_token),
+            params={'fields': 'parents', 'supportsAllDrives': 'true'},
+            timeout=30,
+        )
+        meta.raise_for_status()
+        old_parent_id = ','.join(meta.json().get('parents', []))
+
+    resp = requests.patch(
+        f'{DRIVE_API}/files/{file_id}',
+        headers=_headers(access_token),
+        params={
+            'addParents': new_parent_id,
+            'removeParents': old_parent_id,
+            'fields': 'id,name,parents',
+            'supportsAllDrives': 'true',
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def folder_meta(access_token: str, folder_id: str) -> dict[str, Any]:
+    resp = requests.get(
+        f'{DRIVE_API}/files/{folder_id}',
+        headers=_headers(access_token),
+        params={
+            'fields': 'id,name,trashed,capabilities(canAddChildren)',
+            'supportsAllDrives': 'true',
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    capabilities = data.get('capabilities') or {}
+    return {
+        'id': data.get('id'),
+        'name': data.get('name'),
+        'canAddChildren': bool(capabilities.get('canAddChildren')),
+        'trashed': bool(data.get('trashed', False)),
+    }
