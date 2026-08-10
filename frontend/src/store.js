@@ -15,6 +15,12 @@ export const useStore = create((set, get) => ({
   authSessionExpired: false,
   exportProgress: { done: 0, total: 0 },
   editSettings: {},
+  sessions: [],
+  activeSession: null,
+  runStatus: null,
+  setSessions: (sessions) => set({ sessions }),
+  setActiveSession: (session) => set({ activeSession: session }),
+  setRunStatus: (status) => set({ runStatus: status }),
   setSourceDir: (dir) => set({ sourceDir: dir }),
   setSourceAbsPath: (path) => set({ sourceAbsPath: path }),
   clearPhotos: () => set({
