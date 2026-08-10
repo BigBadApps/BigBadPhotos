@@ -17,6 +17,10 @@ export default defineConfig({
       '/auth':    API_PROXY,
       '/drive':   API_PROXY,
       '/edit':    API_PROXY,
+      '/sessions': API_PROXY,
+      '/runs':    API_PROXY,
+      '/photos':  API_PROXY,
+      '/settings': API_PROXY,
     },
   },
   build: {
