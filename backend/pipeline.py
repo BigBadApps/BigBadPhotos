@@ -174,14 +174,27 @@ class Pipeline:
             self._finalize_stop()
 
     def _finalize_stop(self) -> None:
+        # A decision (apply_decision/approve_all) can commit in the window
+        # between _loop deciding to exit and this method running — its own
+        # atomic UPDATE only checks that the run was 'running' *at that
+        # instant*, which is still true right up until this method flips the
+        # status. Drain edit/export/archive one last time before finalizing
+        # so a last-second approval is processed instead of silently
+        # abandoned, regardless of how that race resolves.
+        if not self._auth_error:
+            try:
+                token = self.token_provider()
+                self._edit()
+                self._export(token)
+                self._archive(token)
+            except Exception as exc:
+                self._record_run_error('shutdown_drain_failed', str(exc))
         conn = db.get()
-        row = conn.execute(
-            'SELECT status FROM runs WHERE id = ?', (self.run_id,)).fetchone()
-        if row and row['status'] == 'running':
-            conn.execute(
-                'UPDATE runs SET status = ?, ended_at = ? WHERE id = ?',
-                ('stopped', _now_iso(), self.run_id))
-            conn.commit()
+        conn.execute(
+            "UPDATE runs SET status = 'stopped', ended_at = ?"
+            " WHERE id = ? AND status = 'running'",
+            (_now_iso(), self.run_id))
+        conn.commit()
         with _active_lock:
             _active.pop(self.run_id, None)
 

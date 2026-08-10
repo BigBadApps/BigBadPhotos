@@ -525,6 +525,32 @@ def test_topaz_edits_before_export():
     assert json.loads(row['edit_json'])['status'] == 'ok'
 
 
+def test_stop_drains_approved_photo_before_finalizing():
+    # Simulates a decision landing in the race window right before shutdown
+    # finalizes: a photo sits 'approved' when _finalize_stop runs (as if
+    # apply_decision's atomic UPDATE committed the instant before the run
+    # flipped to 'stopped'). The drain pass must process it — edit, export,
+    # archive — instead of abandoning it once the run is marked stopped.
+    drive = FakeDrive({'keep_1.jpg': _jpeg_bytes(1)})
+    s = _session(autonomous=False)
+    run_id = _run(s['id'])
+    pipe = _pipe(s, run_id, drive)
+    pipe.poll_once()  # claim/download/score -> awaiting_review
+    row = _rows(run_id)[0]
+    assert row['state'] == 'awaiting_review'
+    pipeline.apply_decision(row['id'], 'keep')
+    assert _rows(run_id)[0]['state'] == 'approved'
+
+    pipe._finalize_stop()
+
+    row = _rows(run_id)[0]
+    assert row['state'] == 'archived'
+    assert row['exported_file_id'] is not None
+    assert [u[1] for u in _image_exports(drive, 'exp1')] == ['keep_1.jpg']
+    run = dict(db.get().execute('SELECT * FROM runs WHERE id = ?', (run_id,)).fetchone())
+    assert run['status'] == 'stopped'
+
+
 def test_start_and_stop_marks_run_stopped():
     s = _session()
     run_id = _run(s['id'])
