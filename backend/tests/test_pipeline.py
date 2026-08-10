@@ -147,7 +147,14 @@ class FakeTopaz:
 def _tmp_db(tmp_path, monkeypatch):
     db.reset_for_tests(str(tmp_path / 'test.db'))
     monkeypatch.setenv('BBP_STAGING_ROOT', str(tmp_path / 'staging'))
+    # pipeline._active is module-level state shared across every test in this
+    # process; without clearing it, a leaked entry from one test (e.g. a
+    # start_run() whose Pipeline is never stopped) can silently satisfy an
+    # unrelated later test via an accidental run_id collision (fresh temp DBs
+    # all restart autoincrement at 1). Reset it on both sides of every test.
+    pipeline._active.clear()
     yield
+    pipeline._active.clear()
 
 
 def _session(**over):
