@@ -9,6 +9,7 @@ import CullingView from './views/CullingView';
 import CompareView from './views/CompareView';
 import EditView from './views/EditView';
 import ReviewExportView from './views/ReviewExportView';
+import ReviewQueueView from './views/ReviewQueueView';
 import { usePhotoLoader } from './hooks/usePhotoLoader';
 import { usePhotoRanker } from './hooks/usePhotoRanker';
 import { useSessionPersistence } from './hooks/useSessionPersistence';
@@ -463,6 +464,7 @@ function AppContent() {
           <Route path="/compare" element={hasPhotos ? <CompareView /> : <Navigate to="/" />} />
           <Route path="/edit"    element={hasPhotos ? <EditView /> : <Navigate to="/" />} />
           <Route path="/review"  element={hasPhotos ? <ReviewExportView /> : <Navigate to="/" />} />
+          <Route path="/review-queue" element={<ReviewQueueView />} />
         </Routes>
         {driveConnecting && (
           <div
