@@ -685,23 +685,27 @@ def _run_status(run_id: int) -> str | None:
 def apply_decision(photo_id: int, decision: str) -> dict:
     """'keep' -> approved, 'reject' -> rejected. Returns the updated photo row.
 
-    Raises RunNotActive if the photo's run isn't currently 'running' — an
-    inactive run has no poll loop left to pick up the approval and export or
-    archive it, which would strand the photo indefinitely."""
+    Raises RunNotActive if the photo's run isn't 'running' *at the moment of
+    the update*. The run-status check and the state write happen in a single
+    atomic UPDATE (not a separate SELECT then UPDATE) — otherwise stop_run()
+    could land in the gap between them and strand the photo in
+    'approved'/'rejected' with no poll loop left to process it."""
     if decision not in ('keep', 'reject'):
         raise ValueError(f"decision must be 'keep' or 'reject', got {decision!r}")
     conn = db.get()
     row = conn.execute('SELECT * FROM photos WHERE id = ?', (photo_id,)).fetchone()
     if row is None:
         raise KeyError(f'photo not found: {photo_id}')
-    if _run_status(row['run_id']) != 'running':
+    new_state = 'approved' if decision == 'keep' else 'rejected'
+    cur = conn.execute(
+        'UPDATE photos SET state = ?, updated_at = ? WHERE id = ? AND EXISTS ('
+        '  SELECT 1 FROM runs WHERE runs.id = photos.run_id AND runs.status = ?'
+        ')',
+        (new_state, _now_iso(), photo_id, 'running'))
+    conn.commit()
+    if cur.rowcount == 0:
         raise RunNotActive(
             f"run {row['run_id']} is not active; resume it before deciding")
-    new_state = 'approved' if decision == 'keep' else 'rejected'
-    conn.execute(
-        'UPDATE photos SET state = ?, updated_at = ? WHERE id = ?',
-        (new_state, _now_iso(), photo_id))
-    conn.commit()
     updated = conn.execute('SELECT * FROM photos WHERE id = ?', (photo_id,)).fetchone()
     return dict(updated)
 
@@ -709,14 +713,19 @@ def apply_decision(photo_id: int, decision: str) -> dict:
 def approve_all(run_id: int) -> int:
     """Bulk-approve every awaiting_review photo for the run; returns count moved.
 
-    Raises RunNotActive if the run isn't currently 'running' — see
-    apply_decision for why an inactive run must not accept approvals."""
-    if _run_status(run_id) != 'running':
-        raise RunNotActive(f'run {run_id} is not active; resume it before approving')
+    Raises RunNotActive if the run isn't 'running' — checked atomically as
+    part of the same UPDATE as the mutation (see apply_decision's docstring
+    for why a separate check-then-act would race with stop_run())."""
     conn = db.get()
     cur = conn.execute(
         'UPDATE photos SET state = ?, updated_at = ?'
-        ' WHERE run_id = ? AND state = ?',
-        ('approved', _now_iso(), run_id, 'awaiting_review'))
+        ' WHERE run_id = ? AND state = ? AND EXISTS ('
+        '   SELECT 1 FROM runs WHERE runs.id = ? AND runs.status = ?'
+        ')',
+        ('approved', _now_iso(), run_id, 'awaiting_review', run_id, 'running'))
     conn.commit()
+    if cur.rowcount == 0 and _run_status(run_id) != 'running':
+        # rowcount can legitimately be 0 because nothing was awaiting_review —
+        # only raise once we've confirmed inactivity was the actual cause.
+        raise RunNotActive(f'run {run_id} is not active; resume it before approving')
     return cur.rowcount
