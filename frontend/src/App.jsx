@@ -11,6 +11,7 @@ import EditView from './views/EditView';
 import ReviewExportView from './views/ReviewExportView';
 import SessionsView from './views/SessionsView';
 import RunView from './views/RunView';
+import ReviewQueueView from './views/ReviewQueueView';
 import { usePhotoLoader } from './hooks/usePhotoLoader';
 import { usePhotoRanker } from './hooks/usePhotoRanker';
 import { useSessionPersistence } from './hooks/useSessionPersistence';
@@ -467,6 +468,7 @@ function AppContent() {
           <Route path="/review"  element={hasPhotos ? <ReviewExportView /> : <Navigate to="/" />} />
           <Route path="/sessions" element={<SessionsView />} />
           <Route path="/sessions/:sessionId" element={<RunView />} />
+          <Route path="/review-queue" element={<ReviewQueueView />} />
         </Routes>
         {driveConnecting && (
           <div
