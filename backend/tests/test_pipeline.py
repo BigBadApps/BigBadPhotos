@@ -551,6 +551,47 @@ def test_stop_drains_approved_photo_before_finalizing():
     assert run['status'] == 'stopped'
 
 
+def test_decision_rejected_once_run_is_stopping():
+    # Proves the actual gap the drain-only fix left open: a decision must be
+    # rejected the instant status leaves 'running' for 'stopping' — not only
+    # once it reaches the final 'stopped' state. This is what makes it
+    # impossible for a fresh approval to land after the drain has already
+    # run: by the time the drain starts, status is already 'stopping', so
+    # every apply_decision/approve_all call from that point on is rejected,
+    # not silently accepted-and-abandoned.
+    drive = FakeDrive({'keep_1.jpg': _jpeg_bytes(1)})
+    s = _session(autonomous=False)
+    run_id = _run(s['id'])
+    pipe = _pipe(s, run_id, drive)
+    pipe.poll_once()
+    row = _rows(run_id)[0]
+    assert row['state'] == 'awaiting_review'
+
+    conn = db.get()
+    conn.execute("UPDATE runs SET status = 'stopping' WHERE id = ?", (run_id,))
+    conn.commit()
+
+    with pytest.raises(pipeline.RunNotActive):
+        pipeline.apply_decision(row['id'], 'keep')
+    assert _rows(run_id)[0]['state'] == 'awaiting_review'
+    with pytest.raises(pipeline.RunNotActive):
+        pipeline.approve_all(run_id)
+    assert _rows(run_id)[0]['state'] == 'awaiting_review'
+
+
+def test_finalize_stop_leaves_status_stopped_not_stuck_stopping():
+    # The two-phase shutdown must still converge to 'stopped', not get stuck
+    # at the intermediate 'stopping' state.
+    drive = FakeDrive({'keep_1.jpg': _jpeg_bytes(1)})
+    s = _session(autonomous=True)
+    run_id = _run(s['id'])
+    pipe = _pipe(s, run_id, drive)
+    pipe._finalize_stop()
+    run = dict(db.get().execute('SELECT * FROM runs WHERE id = ?', (run_id,)).fetchone())
+    assert run['status'] == 'stopped'
+    assert run['ended_at'] is not None
+
+
 def test_start_and_stop_marks_run_stopped():
     s = _session()
     run_id = _run(s['id'])
