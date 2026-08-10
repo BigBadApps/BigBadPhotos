@@ -45,17 +45,19 @@ export function useSessionRun() {
 
   useEffect(() => {
     aliveRef.current = true
-    doPoll()
-    schedule()
+    // Await the first poll before scheduling the next one — schedule() reads
+    // runningRef synchronously, and doPoll() is async, so calling them back
+    // to back here would schedule off the *previous* (stale) running state.
+    doPoll().then(() => { if (aliveRef.current) schedule() })
     return () => {
       aliveRef.current = false
       window.clearTimeout(timerRef.current)
     }
   }, [doPoll, schedule])
 
-  const refresh = useCallback(() => {
-    doPoll()
-    schedule()
+  const refresh = useCallback(async () => {
+    await doPoll()
+    if (aliveRef.current) schedule()
   }, [doPoll, schedule])
 
   const stop = useCallback(async () => {
