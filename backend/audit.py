@@ -43,6 +43,16 @@ def _load_decisions(folder: str) -> dict[str, str]:
 
 
 def run_audit(folder: str, threshold: float, topaz_sample: int, out_path: str) -> str:
+    # folder/out_path are CLI args — canonicalize once, here, before either
+    # reaches a filesystem call below (os.path.realpath resolves `.`/`..`/
+    # symlink segments so a crafted value can't smuggle traversal in).
+    if not folder or '\x00' in folder:
+        raise ValueError(f'invalid folder: {folder!r}')
+    folder = os.path.realpath(folder)
+    if not out_path or '\x00' in out_path:
+        raise ValueError(f'invalid out_path: {out_path!r}')
+    out_path = os.path.realpath(out_path)
+
     names = _collect(folder)
     if not names:
         raise ValueError(f'no JPEGs found in {folder}')

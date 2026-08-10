@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import mimetypes
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -20,6 +21,15 @@ FOLDER_MIME = 'application/vnd.google-apps.folder'
 
 def _headers(access_token: str) -> dict[str, str]:
     return {'Authorization': f'Bearer {access_token}'}
+
+
+def _files_url(file_id: str) -> str:
+    """Build a `.../files/{id}` URL with the id properly path-encoded.
+
+    file_id ultimately traces back to request/route input in some callers
+    (e.g. `/drive/files/<file_id>`) — quote() prevents a crafted id from
+    injecting extra path segments into the Drive API request."""
+    return f'{DRIVE_API}/files/{quote(file_id, safe="")}'
 
 
 def verify_access_token(access_token: str) -> dict[str, Any]:
@@ -94,7 +104,7 @@ def _resolve_file_meta(
         return name, mime
 
     meta = requests.get(
-        f'{DRIVE_API}/files/{file_id}',
+        _files_url(file_id),
         headers=_headers(access_token),
         params={'fields': 'id,name,mimeType'},
         timeout=30,
@@ -118,7 +128,7 @@ def download_file(
         mime_type=mime_type,
     )
     content = requests.get(
-        f'{DRIVE_API}/files/{file_id}',
+        _files_url(file_id),
         headers=_headers(access_token),
         params={'alt': 'media'},
         timeout=120,
@@ -141,7 +151,7 @@ def stream_file(
         mime_type=mime_type,
     )
     content = requests.get(
-        f'{DRIVE_API}/files/{file_id}',
+        _files_url(file_id),
         headers=_headers(access_token),
         params={'alt': 'media'},
         timeout=120,
@@ -303,7 +313,7 @@ def move_file(
 ) -> dict[str, Any]:
     if old_parent_id is None:
         meta = requests.get(
-            f'{DRIVE_API}/files/{file_id}',
+            _files_url(file_id),
             headers=_headers(access_token),
             params={'fields': 'parents', 'supportsAllDrives': 'true'},
             timeout=30,
@@ -312,7 +322,7 @@ def move_file(
         old_parent_id = ','.join(meta.json().get('parents', []))
 
     resp = requests.patch(
-        f'{DRIVE_API}/files/{file_id}',
+        _files_url(file_id),
         headers=_headers(access_token),
         params={
             'addParents': new_parent_id,
@@ -328,7 +338,7 @@ def move_file(
 
 def folder_meta(access_token: str, folder_id: str) -> dict[str, Any]:
     resp = requests.get(
-        f'{DRIVE_API}/files/{folder_id}',
+        _files_url(folder_id),
         headers=_headers(access_token),
         params={
             'fields': 'id,name,trashed,capabilities(canAddChildren)',

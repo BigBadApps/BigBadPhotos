@@ -912,6 +912,9 @@ def edit():
     filename = data.get("filename")
     if not source_dir or not filename:
         return jsonify({"error": "bad_request", "detail": "source_dir and filename are required"}), 400
+    # Canonicalize once, immediately, before it's used in any filesystem
+    # check below — matches _safe_in_dir's own realpath-based guard.
+    source_dir = os.path.realpath(source_dir)
     if not os.path.isdir(source_dir):
         return jsonify({"error": "not_found", "detail": f"source_dir does not exist: {source_dir}"}), 404
 
@@ -926,7 +929,7 @@ def edit():
     if enhancements is None:
         enhancements = topaz.route_by_iso(data.get("iso"))
 
-    output_dir = os.path.join(os.path.realpath(source_dir), EDITED_SUBDIR)
+    output_dir = os.path.join(source_dir, EDITED_SUBDIR)
     try:
         result = topaz.process(
             inputs=[input_path],
@@ -967,10 +970,10 @@ def edit_file():
     if not os.path.isdir(serve_dir):
         return jsonify({"error": "not_found", "detail": "directory not found"}), 404
     try:
-        _safe_in_dir(serve_dir, name)  # traversal guard
+        full_path = _safe_in_dir(serve_dir, name)  # traversal guard; use its return, not a fresh join
     except ValueError as e:
         return jsonify({"error": "bad_request", "detail": str(e)}), 400
-    if not os.path.isfile(os.path.join(serve_dir, name)):
+    if not os.path.isfile(full_path):
         return jsonify({"error": "not_found", "detail": "file not found"}), 404
     return send_from_directory(serve_dir, name)
 

@@ -456,9 +456,12 @@ export default function CompareView() {
               const topPhoto = stack.photos[0];
               const overall = topPhoto?.overallScore ?? topPhoto?.sharpness ?? null;
               return (
-                <div
+                <button
+                  type="button"
                   key={stack.key}
                   onClick={() => handleSelectStack(i)}
+                  aria-label={`Stack ${i + 1}${stack.photos.length > 1 ? ` (${stack.photos.length} photos)` : ''}`}
+                  aria-pressed={isSelected}
                   style={{
                     flexShrink: 0,
                     width: 80,
@@ -466,6 +469,11 @@ export default function CompareView() {
                     cursor: 'pointer',
                     position: 'relative',
                     transition: 'transform .2s var(--ease-out)',
+                    border: 'none',
+                    background: 'transparent',
+                    padding: 0,
+                    display: 'block',
+                    font: 'inherit',
                   }}
                 >
                   {/* Overlapping stack layers visual effect */}
@@ -523,7 +531,7 @@ export default function CompareView() {
                       {stack.photos.length}
                     </span>
                   )}
-                </div>
+                </button>
               );
             })}
           </div>

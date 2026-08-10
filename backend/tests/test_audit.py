@@ -54,6 +54,24 @@ def test_run_audit_empty_folder_errors():
         raise AssertionError('expected error on empty folder')
 
 
+def test_run_audit_rejects_invalid_folder_or_out_path():
+    with tempfile.TemporaryDirectory() as d:
+        for bad_folder in ('', '/tmp/x\x00y'):
+            try:
+                audit.run_audit(bad_folder, threshold=0.6, topaz_sample=0,
+                                out_path=os.path.join(d, 'r.md'))
+            except ValueError:
+                continue
+            raise AssertionError(f'expected ValueError for folder={bad_folder!r}')
+        _write_jpegs(d, n=1)
+        for bad_out in ('', '/tmp/x\x00y'):
+            try:
+                audit.run_audit(d, threshold=0.6, topaz_sample=0, out_path=bad_out)
+            except ValueError:
+                continue
+            raise AssertionError(f'expected ValueError for out_path={bad_out!r}')
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

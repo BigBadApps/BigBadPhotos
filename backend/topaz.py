@@ -109,6 +109,22 @@ def resolve_binary(explicit: Optional[str] = None) -> str:
     return path
 
 
+def _resolve_safe_path(path: str, *, label: str) -> str:
+    """Canonicalize a job-supplied filesystem path before it reaches the
+    filesystem or a subprocess argument list.
+
+    `inputs`/`output_dir` ultimately originate from a JSON job (CLI --job/
+    --job-b64, or an n8n Execute Command payload) — not from an HTTP request,
+    but still external input to this process. `os.path.realpath()` resolves
+    `.`/`..`/symlink segments into a canonical absolute path so a crafted
+    value can't smuggle traversal into a later filesystem/subprocess call;
+    null bytes and empty values are rejected outright.
+    """
+    if not path or '\x00' in path:
+        raise TopazError(f"invalid {label}: {path!r}")
+    return os.path.realpath(path)
+
+
 def _enhancement_args(enhancements: dict[str, Any] | None) -> list[str]:
     """Translate the enhancements dict into CLI tokens (validated)."""
     args: list[str] = []
@@ -221,6 +237,12 @@ def process(
     import time
 
     bin_path = resolve_binary(binary)
+
+    # Canonicalize every path once, here, before any of it reaches the
+    # filesystem or the subprocess argument list below.
+    inputs = [_resolve_safe_path(p, label='input path') for p in inputs]
+    if output_dir:
+        output_dir = _resolve_safe_path(output_dir, label='output_dir')
 
     # Validate inputs exist (fail fast with a clear message vs. opaque 255).
     missing = [p for p in inputs if not os.path.exists(p)]

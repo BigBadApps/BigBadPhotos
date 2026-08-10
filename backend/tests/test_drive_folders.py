@@ -170,3 +170,17 @@ def test_folder_meta_returns_real_bool(monkeypatch):
     assert result['trashed'] is False
     assert result['id'] == 'F1'
     assert result['name'] == 'Shoot'
+
+
+def test_files_url_encodes_id_and_blocks_path_injection():
+    # A crafted file_id must not be able to inject extra path segments into
+    # the Drive API request (e.g. escape /files/<id> into a different path).
+    assert google_drive._files_url('abc123') == \
+        'https://www.googleapis.com/drive/v3/files/abc123'
+    # '/' is percent-encoded so it can't be interpreted as a path separator —
+    # the crafted id stays a single opaque path segment, it can't escape it.
+    injected = google_drive._files_url('../admin')
+    assert '/' not in injected.rsplit('/files/', 1)[1]
+    assert injected == 'https://www.googleapis.com/drive/v3/files/..%2Fadmin'
+    assert google_drive._files_url('a/b') == \
+        'https://www.googleapis.com/drive/v3/files/a%2Fb'

@@ -444,9 +444,11 @@ export default function ReviewQueueView() {
       {status === 'ready' && currentPhoto && selectedId != null && (
         <div
           onClick={() => setSelectedId(null)}
+          onKeyDown={(e) => { if (e.key === 'Escape') setSelectedId(null); }}
           role="dialog"
           aria-modal="true"
           aria-label={currentPhoto.filename || 'Photo detail'}
+          tabIndex={-1}
           style={{
             position: 'fixed', inset: 0, zIndex: 100,
             background: 'rgba(0,0,0,.86)', backdropFilter: 'blur(6px)',
@@ -472,7 +474,7 @@ export default function ReviewQueueView() {
             </button>
           </div>
 
-          <div style={{ position: 'relative', width: 'min(100%, 900px)', flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => e.stopPropagation()}>
+          <div role="presentation" style={{ position: 'relative', width: 'min(100%, 900px)', flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={(e) => e.stopPropagation()}>
             <img
               src={`/photos/${currentPhoto.id}/thumb`}
               alt={currentPhoto.filename || ''}
@@ -541,6 +543,7 @@ export default function ReviewQueueView() {
       {/* Approve-all confirm */}
       {confirmApprove && (
         <div
+          role="presentation"
           onClick={() => setConfirmApprove(false)}
           style={{
             position: 'fixed', inset: 0, zIndex: 90,
@@ -548,7 +551,7 @@ export default function ReviewQueueView() {
             display: 'grid', placeItems: 'center', padding: 'var(--sp-5)',
           }}
         >
-          <div className="card" onClick={(e) => e.stopPropagation()} style={{ width: 'min(400px, 100%)', padding: 'var(--sp-6)', textAlign: 'center' }}>
+          <div role="presentation" className="card" onClick={(e) => e.stopPropagation()} style={{ width: 'min(400px, 100%)', padding: 'var(--sp-6)', textAlign: 'center' }}>
             <div style={{
               width: 44, height: 44, borderRadius: 999, margin: '0 auto var(--sp-3)',
               display: 'grid', placeItems: 'center',

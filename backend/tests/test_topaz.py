@@ -105,6 +105,24 @@ def test_no_inputs_rejected():
     raise AssertionError("empty inputs should raise TopazError")
 
 
+def test_resolve_safe_path_canonicalizes_traversal(tmp_path):
+    nested = tmp_path / "a" / "b"
+    nested.mkdir(parents=True)
+    crafted = str(tmp_path / "a" / ".." / "a" / "b")
+    resolved = topaz._resolve_safe_path(crafted, label="test")
+    assert resolved == os.path.realpath(str(nested))
+    assert ".." not in resolved.split(os.sep)
+
+
+def test_resolve_safe_path_rejects_empty_and_null_byte():
+    for bad in ("", "/tmp/x\x00y"):
+        try:
+            topaz._resolve_safe_path(bad, label="test")
+        except topaz.TopazError:
+            continue
+        raise AssertionError(f"expected TopazError for {bad!r}")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
