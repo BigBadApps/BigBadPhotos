@@ -157,7 +157,9 @@ A **session** ties together a Drive source (inbox) folder, an export folder, a k
 │   ├── mediapipe_eyes.py      # MediaPipe sidecar script (own venv)
 │   ├── auto_edit.py           # Bounded non-destructive edit filter
 │   ├── topaz.py                # Topaz Photo AI CLI wrapper
-│   └── google_drive.py        # Drive API helpers
+│   ├── google_drive.py        # Drive API helpers
+│   ├── google_auth.py         # Server-side Google OAuth token storage
+│   └── audit.py                # Scoring/threshold calibration tooling
 ├── frontend/
 │   └── src/
 │       ├── views/              # SessionsView, RunView, ReviewQueueView, CullingView, ...
@@ -169,7 +171,8 @@ A **session** ties together a Drive source (inbox) folder, an export folder, a k
 ## Testing
 
 ```bash
-# backend
+# backend — requirements-dev.txt adds pytest on top of the runtime deps
+.venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest backend/tests tests -q
 
 # frontend build (there's no frontend test suite yet — a clean build is the gate)
