@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory, session
+from flask import Flask, request, jsonify, send_from_directory, session, Response
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 import cv2
 import numpy as np
@@ -15,6 +15,10 @@ from backend import google_photos
 from backend import topaz
 from backend import google_auth
 from backend import session_worker
+from backend import db
+from backend import pipeline
+from backend import preflight
+from backend import sessions
 from backend.scoring import (
     decode_image, score_sharpness, score_exposure, score_noise,
     score_contrast, score_faces, compute_phash, hamming_distance,
@@ -121,6 +125,9 @@ def enforce_auth():
     if (request.path not in API_ROUTES
             and not request.path.startswith('/drive')
             and not request.path.startswith('/photos')
+            and not request.path.startswith('/sessions')
+            and not request.path.startswith('/runs')
+            and not request.path.startswith('/settings')
             and not request.path.startswith('/autonomous')):
         return  # static files, /health, /auth/* all pass through
     if not HAS_AUTH:
@@ -473,11 +480,33 @@ def photos_upload():
 
 @app.post('/autonomous/start')
 def autonomous_start():
+    """Alias onto the sessions pipeline (P6) until Task 9 deletes it.
+
+    With a `sessionId` in the body it starts a named session through
+    `pipeline.start_run`. Without one it falls back to the legacy singleton
+    worker shape so the old frontend panel and its tests keep working through
+    P6.
+    """
     mgr = google_auth.get_manager()
     if not mgr.available():
         return jsonify({'error': 'server_google_not_connected',
                         'detail': 'Connect via /google/oauth/start first'}), 401
     data = request.get_json(silent=True) or {}
+    session_id = data.get('sessionId')
+    if session_id is not None:
+        try:
+            session_id = int(session_id)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'bad_config',
+                            'detail': 'sessionId must be an integer'}), 400
+        try:
+            result = pipeline.start_run(session_id, _google_token)
+        except ValueError as e:
+            return jsonify({'error': 'not_found', 'detail': str(e)}), 404
+        except pipeline.RunConflict as e:
+            return jsonify({'error': 'already_running', 'detail': str(e)}), 409
+        return jsonify({'ok': True, **result})
+    # Legacy singleton-worker path (removed by Task 9).
     try:
         config = session_worker.SessionConfig.from_dict(data)
     except ValueError as e:
@@ -496,13 +525,285 @@ def autonomous_start():
 
 @app.post('/autonomous/stop')
 def autonomous_stop():
-    stopped = session_worker.stop_worker()
+    stopped = pipeline.stop_run()
     return jsonify({'ok': True, 'stopped': stopped})
 
 
 @app.get('/autonomous/status')
 def autonomous_status():
-    return jsonify(session_worker.worker_status())
+    return jsonify(pipeline.active_status())
+
+
+# ---------------------------------------------------------------------------
+# Photo sessions (P6): session, run, photo, and settings routes
+# ---------------------------------------------------------------------------
+
+def _session_run_active(session_id) -> bool:
+    row = db.get().execute(
+        'SELECT id FROM runs WHERE session_id = ? AND status = ?',
+        (session_id, 'running')).fetchone()
+    return row is not None
+
+
+def _photo_row_to_dict(row: dict) -> dict:
+    """Map a raw `photos` row (snake_case) to a camelCase API photo."""
+    def _parse_json(value):
+        if not value:
+            return None
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else None
+        except ValueError:
+            return None
+    return {
+        'id': row['id'],
+        'runId': row['run_id'],
+        'driveFileId': row['drive_file_id'],
+        'filename': row['filename'],
+        'state': row['state'],
+        'overallScore': row['overall_score'],
+        'metrics': _parse_json(row['metrics_json']),
+        'edit': _parse_json(row['edit_json']),
+        'exportedFileId': row['exported_file_id'],
+        'errorCode': row['error_code'],
+        'errorDetail': row['error_detail'],
+        'attempts': row['attempts'],
+        'claimedAt': row['claimed_at'],
+        'updatedAt': row['updated_at'],
+    }
+
+
+@app.get('/sessions')
+def sessions_list():
+    return jsonify({'sessions': sessions.list_all()})
+
+
+@app.post('/sessions')
+def sessions_create():
+    data = request.get_json(silent=True) or {}
+    try:
+        created = sessions.create(data)
+    except sessions.SessionError as e:
+        return jsonify({'error': 'bad_config', 'detail': str(e)}), 400
+    return jsonify({'ok': True, 'session': created})
+
+
+@app.get('/sessions/<int:session_id>')
+def sessions_get(session_id):
+    s = sessions.get(session_id)
+    if s is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'session not found: {session_id}'}), 404
+    return jsonify({'session': s})
+
+
+@app.put('/sessions/<int:session_id>')
+def sessions_update(session_id):
+    s = sessions.get(session_id)
+    if s is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'session not found: {session_id}'}), 404
+    data = request.get_json(silent=True) or {}
+    if _session_run_active(session_id):
+        # Re-pointing folders mid-run would strand the running worker.
+        if any(k in data for k in ('sourceFolderId', 'exportFolderId')):
+            return jsonify({'error': 'run_in_progress',
+                            'detail': 'stop the active run before changing '
+                                      'this session\'s folders'}), 409
+    try:
+        updated = sessions.update(session_id, data)
+    except sessions.SessionError as e:
+        return jsonify({'error': 'bad_config', 'detail': str(e)}), 400
+    return jsonify({'ok': True, 'session': updated})
+
+
+@app.delete('/sessions/<int:session_id>')
+def sessions_delete(session_id):
+    if sessions.get(session_id) is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'session not found: {session_id}'}), 404
+    if _session_run_active(session_id):
+        return jsonify({'error': 'run_in_progress',
+                        'detail': 'stop the active run before deleting this session'}), 409
+    sessions.delete(session_id)
+    return jsonify({'ok': True})
+
+
+@app.post('/sessions/<int:session_id>/preflight')
+def sessions_preflight(session_id):
+    s = sessions.get(session_id)
+    if s is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'session not found: {session_id}'}), 404
+    if not google_auth.get_manager().available():
+        return jsonify({'error': 'server_google_not_connected',
+                        'detail': 'Connect via /google/oauth/start first'}), 401
+    checks = preflight.run(s, _google_token)
+    return jsonify({'checks': checks})
+
+
+@app.post('/sessions/<int:session_id>/start')
+def sessions_start(session_id):
+    s = sessions.get(session_id)
+    if s is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'session not found: {session_id}'}), 404
+    if not google_auth.get_manager().available():
+        return jsonify({'error': 'server_google_not_connected',
+                        'detail': 'Connect via /google/oauth/start first'}), 401
+    try:
+        result = pipeline.start_run(session_id, _google_token)
+    except pipeline.RunConflict as e:
+        return jsonify({'error': 'already_running', 'detail': str(e)}), 409
+    return jsonify({'ok': True, **result})
+
+
+@app.get('/runs/active')
+def runs_active():
+    return jsonify(pipeline.active_status())
+
+
+@app.post('/runs/active/stop')
+def runs_active_stop():
+    stopped = pipeline.stop_run()
+    return jsonify({'ok': True, 'stopped': stopped})
+
+
+@app.get('/runs/<int:run_id>/photos')
+def runs_photos(run_id):
+    conn = db.get()
+    run = conn.execute('SELECT id FROM runs WHERE id = ?', (run_id,)).fetchone()
+    if run is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'run not found: {run_id}'}), 404
+    state = request.args.get('state')
+    limit = request.args.get('limit')
+    offset = request.args.get('offset')
+    query = 'SELECT * FROM photos WHERE run_id = ?'
+    params = [run_id]
+    if state:
+        query += ' AND state = ?'
+        params.append(state)
+    query += ' ORDER BY id'
+    try:
+        if limit:
+            query += ' LIMIT ?'
+            params.append(int(limit))
+            if offset:
+                query += ' OFFSET ?'
+                params.append(int(offset))
+    except ValueError:
+        return jsonify({'error': 'bad_config',
+                        'detail': 'limit and offset must be integers'}), 400
+    rows = conn.execute(query, params).fetchall()
+    return jsonify({'photos': [_photo_row_to_dict(r) for r in rows]})
+
+
+@app.post('/runs/<int:run_id>/approve-all')
+def runs_approve_all(run_id):
+    conn = db.get()
+    run = conn.execute('SELECT id FROM runs WHERE id = ?', (run_id,)).fetchone()
+    if run is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'run not found: {run_id}'}), 404
+    count = pipeline.approve_all(run_id)
+    return jsonify({'ok': True, 'count': count})
+
+
+@app.post('/photos/<int:photo_id>/decision')
+def photos_decision(photo_id):
+    data = request.get_json(silent=True) or {}
+    decision = data.get('decision')
+    try:
+        row = pipeline.apply_decision(photo_id, decision)
+    except KeyError:
+        return jsonify({'error': 'not_found',
+                        'detail': f'photo not found: {photo_id}'}), 404
+    except ValueError as e:
+        return jsonify({'error': 'bad_config', 'detail': str(e)}), 400
+    return jsonify({'ok': True, 'photo': _photo_row_to_dict(row)})
+
+
+@app.get('/photos/<int:photo_id>/thumb')
+def photos_thumb(photo_id):
+    """Proxy the Drive file through the server token; never redirect to Google."""
+    if not google_auth.get_manager().available():
+        return jsonify({'error': 'server_google_not_connected',
+                        'detail': 'Connect via /google/oauth/start first'}), 401
+    row = db.get().execute(
+        'SELECT drive_file_id, filename FROM photos WHERE id = ?',
+        (photo_id,)).fetchone()
+    if row is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'photo not found: {photo_id}'}), 404
+    try:
+        body, resolved_name, resolved_mime = google_drive.stream_file(
+            _google_token(), row['drive_file_id'], filename=row['filename'])
+    except Exception as exc:
+        return jsonify({'error': 'drive_error', 'detail': str(exc)}), 502
+    return Response(body, mimetype=resolved_mime, headers={
+        'Content-Disposition': f'inline; filename="{resolved_name}"',
+        'Cache-Control': 'private, max-age=3600',
+    })
+
+
+@app.get('/drive/folders')
+def drive_folders_browse():
+    """Browse subfolders of a parent. Distinct from /drive/browse (P6 spec)."""
+    err = _drive_auth_error()
+    if err:
+        return err
+    parent = request.args.get('parent') or 'root'
+    try:
+        folders = google_drive.list_folders(_google_token(), parent)
+    except Exception as exc:
+        return jsonify({'error': 'drive_error', 'detail': str(exc)}), 502
+    return jsonify({'parent': parent, 'items': folders})
+
+
+@app.post('/drive/folders')
+def drive_folders_create():
+    err = _drive_auth_error()
+    if err:
+        return err
+    data = request.get_json(silent=True) or {}
+    parent_id = (data.get('parentId') or '').strip()
+    name = (data.get('name') or '').strip()
+    if not parent_id or not name:
+        return jsonify({'error': 'bad_config',
+                        'detail': 'parentId and name are required'}), 400
+    try:
+        folder = google_drive.create_folder(_google_token(), parent_id, name)
+    except Exception as exc:
+        return jsonify({'error': 'drive_error', 'detail': str(exc)}), 502
+    return jsonify({'ok': True, 'folder': folder})
+
+
+# Known app-wide wiring keys: {public API name: app_settings key}.
+_SETTINGS_KEYS = (
+    ('inboxFolderId', 'inbox_folder_id'),
+    ('inboxFolderName', 'inbox_folder_name'),
+    ('sessionsRoot', 'sessions_root_folder_id'),
+)
+
+
+def _settings_payload() -> dict:
+    return {public: sessions.get_setting(key) for public, key in _SETTINGS_KEYS}
+
+
+@app.get('/settings')
+def settings_get():
+    return jsonify(_settings_payload())
+
+
+@app.put('/settings')
+def settings_put():
+    data = request.get_json(silent=True) or {}
+    for public, key in _SETTINGS_KEYS:
+        if public in data:
+            value = data[public]
+            sessions.set_setting(key, '' if value is None else str(value))
+    return jsonify(_settings_payload())
 
 
 @app.route('/', defaults={'path': ''})
