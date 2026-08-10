@@ -5,8 +5,6 @@
  * When enabled:  live phase indicator, counters, poll countdown, error list.
  */
 import { useState, useEffect, useCallback } from 'react'
-import { useStore } from '../store'
-import ServerAutonomousPanel from './ServerAutonomousPanel'
 
 const PHASE_LABEL = {
   idle:      '—',
@@ -201,18 +199,5 @@ function LegacyAutonomousPanel({
 }
 
 export default function AutonomousPanel(props) {
-  const [available, setAvailable] = useState(false)
-  const sourceDir = useStore(s => s.sourceDir)
-  useEffect(() => {
-    let alive = true
-    fetch('/auth/config', { credentials: 'include' })
-      .then(r => r.ok ? r.json() : {})
-      .then(cfg => { if (alive) setAvailable(!!cfg.worker) })
-      .catch(() => {})
-    return () => { alive = false }
-  }, [])
-  if (available && sourceDir?._drive) {
-    return <ServerAutonomousPanel />
-  }
   return <LegacyAutonomousPanel {...props} />
 }

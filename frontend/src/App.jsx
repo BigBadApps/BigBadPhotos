@@ -25,7 +25,6 @@ import {
   resumeDriveRedirectIfNeeded,
 } from './utils/googleDrive';
 import { useAutonomousMode } from './hooks/useAutonomousMode';
-import AutonomousPanel       from './components/AutonomousPanel';
 
 const HAS_DIR_PICKER = typeof window !== 'undefined' && 'showDirectoryPicker' in window;
 

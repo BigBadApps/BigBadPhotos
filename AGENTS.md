@@ -7,7 +7,7 @@
 | Service | Command | Port | Notes |
 |---------|---------|------|-------|
 | Flask backend | `BBP_PORT=8002 BBP_DEBUG=1 python3 app.py` | 8002 | Serves API + production frontend from `frontend/dist/` |
-| Vite dev server | `cd frontend && npm run dev` | 5173 | Proxies `/health`, `/analyze`, `/rank`, `/auth` to Flask on 8002 |
+| Vite dev server | `cd frontend && npm run dev` | 5173 | Proxies `/health`, `/analyze`, `/rank`, `/auth`, `/drive`, `/edit` to Flask on 8002 |
 
 ### Running in development
 
@@ -19,7 +19,7 @@ To use the production build path, first run `cd frontend && npm run build` to ge
 
 ### Authentication bypass
 
-In the browser, click "Try success" on the auth gate to bypass Google Sign-In for local development. The API endpoints `/analyze` and `/rank` still require a valid session — only the frontend UI is bypassed.
+In the browser, click "Try success" on the auth gate to bypass Google Sign-In for local development. The API endpoints (`/analyze`, `/rank`, `/sessions`, `/runs`, `/photos`, `/settings`) still require a valid session — only the frontend UI is bypassed.
 
 ### Known dev-mode caveat
 

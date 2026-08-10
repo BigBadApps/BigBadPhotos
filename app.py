@@ -14,7 +14,6 @@ from backend import google_drive
 from backend import google_photos
 from backend import topaz
 from backend import google_auth
-from backend import session_worker
 from backend import db
 from backend import pipeline
 from backend import preflight
@@ -127,8 +126,7 @@ def enforce_auth():
             and not request.path.startswith('/photos')
             and not request.path.startswith('/sessions')
             and not request.path.startswith('/runs')
-            and not request.path.startswith('/settings')
-            and not request.path.startswith('/autonomous')):
+            and not request.path.startswith('/settings')):
         return  # static files, /health, /auth/* all pass through
     if not HAS_AUTH:
         return  # No auth configured = open access
@@ -476,62 +474,6 @@ def photos_upload():
                         'detail': result.get('error', 'unknown')}), 502
     return jsonify({'ok': True, 'filename': filename,
                     'mediaItemId': result.get('mediaItemId')})
-
-
-@app.post('/autonomous/start')
-def autonomous_start():
-    """Alias onto the sessions pipeline (P6) until Task 9 deletes it.
-
-    With a `sessionId` in the body it starts a named session through
-    `pipeline.start_run`. Without one it falls back to the legacy singleton
-    worker shape so the old frontend panel and its tests keep working through
-    P6.
-    """
-    mgr = google_auth.get_manager()
-    if not mgr.available():
-        return jsonify({'error': 'server_google_not_connected',
-                        'detail': 'Connect via /google/oauth/start first'}), 401
-    data = request.get_json(silent=True) or {}
-    session_id = data.get('sessionId')
-    if session_id is not None:
-        try:
-            session_id = int(session_id)
-        except (TypeError, ValueError):
-            return jsonify({'error': 'bad_config',
-                            'detail': 'sessionId must be an integer'}), 400
-        try:
-            result = pipeline.start_run(session_id, _google_token)
-        except ValueError as e:
-            return jsonify({'error': 'not_found', 'detail': str(e)}), 404
-        except pipeline.RunConflict as e:
-            return jsonify({'error': 'already_running', 'detail': str(e)}), 409
-        return jsonify({'ok': True, **result})
-    # Legacy singleton-worker path (removed by Task 9).
-    try:
-        config = session_worker.SessionConfig.from_dict(data)
-    except ValueError as e:
-        return jsonify({'error': 'bad_config', 'detail': str(e)}), 400
-    if config.edit:
-        try:
-            topaz.resolve_binary()
-        except Exception as e:
-            return jsonify({'error': 'topaz_unavailable', 'detail': str(e)}), 400
-    try:
-        session_worker.start_worker(config, mgr.get_access_token)
-    except RuntimeError as e:
-        return jsonify({'error': 'already_running', 'detail': str(e)}), 409
-    return jsonify({'ok': True, 'status': session_worker.worker_status()})
-
-
-@app.post('/autonomous/stop')
-def autonomous_stop():
-    stopped = pipeline.stop_run()
-    return jsonify({'ok': True, 'stopped': stopped})
-
-
-@app.get('/autonomous/status')
-def autonomous_status():
-    return jsonify(pipeline.active_status())
 
 
 # ---------------------------------------------------------------------------
