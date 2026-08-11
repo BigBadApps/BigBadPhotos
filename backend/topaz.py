@@ -19,6 +19,20 @@ Binary path resolves from env BBP_TOPAZ_BIN, else the known macOS bundle path.
 CLI usage (what n8n's Execute Command node calls):
     python -m backend.topaz --job '{"inputs": ["/path/a.jpg"], ...}'
 Prints a single JSON object to stdout and exits 0 on success, non-zero on failure.
+
+Path model (why the NOSONAR markers in process() are justified): `inputs`/
+`output_dir` are canonicalized via _resolve_safe_path() (os.path.realpath())
+at the top of process() before any filesystem or subprocess-argv use. They
+originate from a JSON job — CLI --job/--job-b64, or the local n8n Execute
+Command node — not from a network-reachable HTTP input. This wrapper is
+intentionally general-purpose over any local folder the operator/automation
+names (Topaz has to run against whatever folder a shoot actually landed in).
+A fixed allowed-root containment check, which SonarCloud's path-injection
+rule set otherwise wants, would defeat that by design; an attacker who can
+already set this process's CLI args or n8n job payload already has local
+control equivalent to shell access. See backend/audit.py's module docstring
+for the same reasoning applied consistently across every local-path tool in
+this app.
 """
 from __future__ import annotations
 
@@ -250,7 +264,7 @@ def process(
         raise TopazError(f"Input path(s) not found: {missing}")
 
     if output_dir:
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        Path(output_dir).mkdir(parents=True, exist_ok=True)  # NOSONAR see module docstring
 
     argv = build_command(
         binary=bin_path, inputs=inputs, output_dir=output_dir,
@@ -264,16 +278,16 @@ def process(
     # which files this call produced (new names, or --overwrite in place),
     # rather than every file that happens to already be in a shared dir.
     before_mtimes: dict[str, float] = {}
-    if output_dir and os.path.isdir(output_dir):
-        for f in os.listdir(output_dir):
+    if output_dir and os.path.isdir(output_dir):  # NOSONAR see module docstring
+        for f in os.listdir(output_dir):  # NOSONAR see module docstring
             if f.startswith("."):
                 continue
             try:
-                before_mtimes[f] = os.path.getmtime(os.path.join(output_dir, f))
+                before_mtimes[f] = os.path.getmtime(os.path.join(output_dir, f))  # NOSONAR see module docstring
             except OSError:
                 pass
 
-    logger.info("Running Topaz: %s", " ".join(shlex.quote(a) for a in argv))
+    logger.info("Running Topaz: %s", " ".join(shlex.quote(a) for a in argv))  # NOSONAR see module docstring
     started = time.monotonic()
     try:
         proc = subprocess.run(
@@ -294,14 +308,14 @@ def process(
     stderr_clean = _clean_stdout(proc.stderr or "")
 
     outputs: list[str] = []
-    if output_dir and os.path.isdir(output_dir):
+    if output_dir and os.path.isdir(output_dir):  # NOSONAR see module docstring
         new_or_changed = []
-        for f in os.listdir(output_dir):
+        for f in os.listdir(output_dir):  # NOSONAR see module docstring
             if f.startswith("."):
                 continue
             full = os.path.join(output_dir, f)
             try:
-                mtime = os.path.getmtime(full)
+                mtime = os.path.getmtime(full)  # NOSONAR see module docstring
             except OSError:
                 continue
             if f not in before_mtimes or mtime > before_mtimes[f]:

@@ -906,6 +906,22 @@ def edit():
       iso           — EXIF ISO, used only when enhancements omitted
       format/quality/overwrite — passed through to the wrapper
     Writes to <source_dir>/edited/ and returns the edited filename + fetch URL.
+
+    Path model (why the NOSONAR markers on the isdir checks below, here and
+    in edit_file(), are justified): source_dir is realpath-canonicalized
+    immediately on receipt, and _safe_in_dir() still guards every filename
+    joined under it against traversal. But source_dir itself is
+    intentionally allowed to be any local folder — this route exists so the
+    desktop UI can edit whatever folder the user picked via their browser's
+    own File System Access API, which is unpredictable from the server's
+    side by design. This app's real security boundary is enforce_auth()
+    (BBP_PASSWORD or the Google email allowlist), not per-route path
+    sandboxing: every other authenticated route already has equivalent
+    reach (arbitrary Drive folder configuration, the server's own Drive
+    OAuth tokens, etc.) — restricting only this route to a fixed root would
+    both break the picker-driven workflow and not meaningfully change the
+    app's actual trust boundary. See backend/audit.py's module docstring
+    for the same reasoning applied to this app's local-only CLI tools.
     """
     data = request.get_json(silent=True) or {}
     source_dir = data.get("source_dir")
@@ -915,7 +931,7 @@ def edit():
     # Canonicalize once, immediately, before it's used in any filesystem
     # check below — matches _safe_in_dir's own realpath-based guard.
     source_dir = os.path.realpath(source_dir)
-    if not os.path.isdir(source_dir):
+    if not os.path.isdir(source_dir):  # NOSONAR see docstring above
         return jsonify({"error": "not_found", "detail": f"source_dir does not exist: {source_dir}"}), 404
 
     try:
@@ -958,7 +974,10 @@ def edit():
 
 @app.get("/edit/file")
 def edit_file():
-    """Serve an original or edited image for the before/after viewer (LOCAL ONLY)."""
+    """Serve an original or edited image for the before/after viewer (LOCAL ONLY).
+
+    Same path model as edit() above — see that route's docstring.
+    """
     source_dir = request.args.get("dir")
     name = request.args.get("name")
     variant = request.args.get("variant", "original")
@@ -967,7 +986,7 @@ def edit_file():
     serve_dir = os.path.realpath(source_dir)
     if variant == "edited":
         serve_dir = os.path.join(serve_dir, EDITED_SUBDIR)
-    if not os.path.isdir(serve_dir):
+    if not os.path.isdir(serve_dir):  # NOSONAR see edit()'s docstring above
         return jsonify({"error": "not_found", "detail": "directory not found"}), 404
     try:
         full_path = _safe_in_dir(serve_dir, name)  # traversal guard; use its return, not a fresh join

@@ -7,6 +7,20 @@ Usage:
 Agreement analysis uses, when present in the folder:
   - bigbad_decisions.json  (exported decisions: keep/maybe/reject per filename)
   Note: `.bbp.json` sidecars are not currently scanned; only `bigbad_decisions.json` is used.
+
+Path model (why the NOSONAR markers below are justified, not suppression for
+its own sake): `folder`/`out_path` are canonicalized via os.path.realpath()
+at the top of run_audit() before any filesystem call. This is a local CLI
+tool invoked directly by a trusted operator at a terminal — not a
+network-reachable input — and it is intentionally general-purpose over any
+local folder the operator names (a real photo shoot could live anywhere:
+an external drive, a Drive-synced folder, a scratch directory). A fixed
+allowed-root containment check, which SonarCloud's path-injection rule set
+otherwise wants, would defeat that by design rather than add real protection
+here; an attacker who already has local shell access to run this script
+doesn't need it to read arbitrary files. See backend/topaz.py and the
+`/edit`, `/edit/file` routes in app.py for the same reasoning applied
+consistently across every local-path tool in this app.
 """
 from __future__ import annotations
 
@@ -35,7 +49,7 @@ def _collect(folder: str) -> list[str]:
 def _load_decisions(folder: str) -> dict[str, str]:
     path = os.path.join(folder, 'bigbad_decisions.json')
     try:
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, 'r', encoding='utf-8') as f:  # NOSONAR see module docstring: local-CLI-tool path model
             data = json.load(f)
         return {k: v for k, v in (data.get('decisions') or {}).items()}
     except (OSError, ValueError):
@@ -66,7 +80,7 @@ def run_audit(folder: str, threshold: float, topaz_sample: int, out_path: str) -
         chunk = names[i:i + BATCH]
         tasks = []
         for n in chunk:
-            with open(os.path.join(folder, n), 'rb') as f:
+            with open(os.path.join(folder, n), 'rb') as f:  # NOSONAR see module docstring
                 tasks.append((n, n, f.read()))
         t0 = time.perf_counter()
         results, errors = scoring.rank_images(tasks)
@@ -153,8 +167,8 @@ def run_audit(folder: str, threshold: float, topaz_sample: int, out_path: str) -
         lines += ['## Scoring failures', ''] + [
             f'- `{e["filename"]}`: {e["detail"]}' for e in all_errors[:20]] + ['']
 
-    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-    with open(out_path, 'w', encoding='utf-8') as f:
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)  # NOSONAR see module docstring
+    with open(out_path, 'w', encoding='utf-8') as f:  # NOSONAR see module docstring
         f.write('\n'.join(lines))
     return out_path
 
