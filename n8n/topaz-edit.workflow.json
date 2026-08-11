@@ -1,0 +1,69 @@
+{
+  "name": "BigBadPhotos — Topaz Auto-Edit",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "topaz-edit",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-topaz",
+      "name": "Webhook (POST /topaz-edit)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "bbp-topaz-edit"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate + normalize the incoming job, then base64-encode it so the\n// Execute Command node can pass it to the Python wrapper without any shell\n// quoting/injection risk (base64 alphabet is shell-safe).\nconst body = $json.body || {};\n\nconst inputs = body.inputs || (body.input ? [body.input] : []);\nif (!Array.isArray(inputs) || inputs.length === 0) {\n  throw new Error('Job must include a non-empty \"inputs\" array (or \"input\").');\n}\nif (!body.output_dir && !body.output) {\n  throw new Error('Job must include \"output_dir\".');\n}\n\nconst ALLOWED_ENH = ['upscale', 'noise', 'sharpen', 'lighting', 'color'];\nconst enh = body.enhancements || {};\nfor (const k of Object.keys(enh)) {\n  if (!ALLOWED_ENH.includes(k)) {\n    throw new Error(`Unknown enhancement '${k}'. Allowed: ${ALLOWED_ENH.join(', ')}`);\n  }\n}\n\n// Whitelist the job shape we forward — drop anything unexpected.\nconst job = {\n  inputs,\n  output_dir: body.output_dir || body.output,\n  enhancements: enh,\n  format: body.format,\n  quality: body.quality,\n  overwrite: !!body.overwrite,\n  recursive: !!body.recursive,\n  override: !!body.override,\n  skip_processing: !!body.skip_processing,\n  show_settings: !!body.show_settings,\n  timeout_s: body.timeout_s || 1800\n};\n\nconst b64 = Buffer.from(JSON.stringify(job)).toString('base64');\nreturn [{ json: { job, b64 } }];"
+      },
+      "id": "code-validate",
+      "name": "Validate + base64 job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "command": "=cd \"/Volumes/BigBadDrive_1/BigBadPhotos\" && BBP_TOPAZ_BIN=\"/Volumes/BigBadDrive_1/Applications/Topaz Photo AI.app/Contents/MacOS/Topaz Photo AI\" .venv/bin/python -m backend.topaz --job-b64 {{ $json.b64 }}"
+      },
+      "id": "exec-topaz",
+      "name": "Run Topaz (Execute Command)",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// The wrapper prints one JSON object on stdout (plus INFO log lines on stderr).\n// Parse the last non-empty stdout line as the result.\nconst raw = ($json.stdout || '').trim();\nconst lines = raw.split('\\n').filter(Boolean);\nlet result;\ntry {\n  result = JSON.parse(lines[lines.length - 1]);\n} catch (e) {\n  result = { ok: false, status: 'error', detail: 'Could not parse wrapper output', stdout: raw, stderr: $json.stderr };\n}\nreturn [{ json: result }];"
+      },
+      "id": "code-parse",
+      "name": "Parse result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "respond",
+      "name": "Respond to caller",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1200, 300]
+    }
+  ],
+  "connections": {
+    "Webhook (POST /topaz-edit)": { "main": [[{ "node": "Validate + base64 job", "type": "main", "index": 0 }]] },
+    "Validate + base64 job": { "main": [[{ "node": "Run Topaz (Execute Command)", "type": "main", "index": 0 }]] },
+    "Run Topaz (Execute Command)": { "main": [[{ "node": "Parse result", "type": "main", "index": 0 }]] },
+    "Parse result": { "main": [[{ "node": "Respond to caller", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "BigBadPhotos" }, { "name": "Topaz" }]
+}

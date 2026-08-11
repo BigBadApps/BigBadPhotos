@@ -1,12 +1,14 @@
 venv/
 .venv/
-backend/
+.venv-mediapipe/
 __pycache__/
 *.pyc
 .env
 frontend/.env.local
+frontend/env.local
 frontend/node_modules/
 frontend/dist/
 *.crt
 *.key
 .DS_Store
+.preview/

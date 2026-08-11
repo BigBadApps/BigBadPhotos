@@ -7,7 +7,7 @@
 | Service | Command | Port | Notes |
 |---------|---------|------|-------|
 | Flask backend | `BBP_PORT=8002 BBP_DEBUG=1 python3 app.py` | 8002 | Serves API + production frontend from `frontend/dist/` |
-| Vite dev server | `cd frontend && npm run dev` | 5173 | Proxies `/health`, `/analyze`, `/rank`, `/auth` to Flask on 8002 |
+| Vite dev server | `cd frontend && npm run dev` | 5173 | Proxies `/health`, `/analyze`, `/rank`, `/auth`, `/drive`, `/edit` to Flask on 8002 |
 
 ### Running in development
 
@@ -19,7 +19,7 @@ To use the production build path, first run `cd frontend && npm run build` to ge
 
 ### Authentication bypass
 
-In the browser, click "Try success" on the auth gate to bypass Google Sign-In for local development. The API endpoints `/analyze` and `/rank` still require a valid session — only the frontend UI is bypassed.
+In the browser, click "Try success" on the auth gate to bypass Google Sign-In for local development. The API endpoints (`/analyze`, `/rank`, `/sessions`, `/runs`, `/photos`, `/settings`) still require a valid session — only the frontend UI is bypassed.
 
 ### Known dev-mode caveat
 
@@ -40,6 +40,7 @@ The combination of zustand 4.4.0 + React 19 + Vite 8 dev server may produce an E
 - `GOOGLE_CLIENT_ID` / `BBP_ALLOWED_EMAILS` — optional, for real Google auth
 - `FLASK_SECRET_KEY` — optional, auto-generated if unset
 - Local Python: `python3.12 -m venv .venv` + `pip install -r requirements.txt` (`.venv/` is gitignored)
+- **MediaPipe eye detection sidecar** (`.venv-mediapipe/`, gitignored): `backend/scoring.py` calls `backend/mediapipe_eyes.py` as a subprocess for EAR-based eye-open detection; any failure falls back to Haar cascades. MediaPipe must stay out of the main `.venv` (it pulls opencv-contrib-python 5.x which overwrites the pinned opencv-python-headless). Recreate with: `python3.12 -m venv .venv-mediapipe && .venv-mediapipe/bin/pip install -r requirements-mediapipe.txt`, then download the model per that file's comments. Override the interpreter path with `BBP_MEDIAPIPE_PYTHON`.
 
 ### Node version
 

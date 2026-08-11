@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory, session
+from flask import Flask, request, jsonify, send_from_directory, session, Response
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 import cv2
 import numpy as np
@@ -11,6 +11,19 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from typing import List
 from backend import google_drive
+from backend import google_photos
+from backend import topaz
+from backend import google_auth
+from backend import db
+from backend import pipeline
+from backend import preflight
+from backend import sessions
+from backend.scoring import (
+    decode_image, score_sharpness, score_exposure, score_noise,
+    score_contrast, score_faces, compute_phash, hamming_distance,
+    score_composition, composite_score,
+)
+from backend import scoring
 
 try:
     from dotenv import load_dotenv
@@ -72,7 +85,25 @@ if not ALLOWED_EMAILS:
     print("⚠️  BBP_ALLOWED_EMAILS is empty — all logins will be rejected")
 
 
-API_ROUTES = {'/analyze', '/rank'}
+API_ROUTES = {'/analyze', '/rank', '/edit', '/edit/file'}
+
+# Photo editing (Topaz) — LOCAL ONLY. Topaz runs on this machine; these routes
+# operate on absolute paths on the local filesystem, not uploaded bytes.
+EDITED_SUBDIR = 'edited'
+
+
+def _safe_in_dir(source_dir: str, filename: str) -> str:
+    """Resolve `filename` inside `source_dir`, rejecting traversal. Returns abs path.
+
+    Raises ValueError if filename escapes the directory or isn't a plain name.
+    """
+    if not filename or filename != os.path.basename(filename):
+        raise ValueError('filename must be a bare name, not a path')
+    base = os.path.realpath(source_dir)
+    full = os.path.realpath(os.path.join(base, filename))
+    if full != os.path.join(base, filename) and not full.startswith(base + os.sep):
+        raise ValueError('resolved path escapes source directory')
+    return full
 
 
 @app.after_request
@@ -90,7 +121,12 @@ def set_csrf_cookie(response):
 def enforce_auth():
     if request.path == '/drive/status':
         return
-    if request.path not in API_ROUTES and not request.path.startswith('/drive'):
+    if (request.path not in API_ROUTES
+            and not request.path.startswith('/drive')
+            and not request.path.startswith('/photos')
+            and not request.path.startswith('/sessions')
+            and not request.path.startswith('/runs')
+            and not request.path.startswith('/settings')):
         return  # static files, /health, /auth/* all pass through
     if not HAS_AUTH:
         return  # No auth configured = open access
@@ -178,6 +214,8 @@ def auth_config():
         'dev': IS_DEBUG,
         'open': not HAS_AUTH,
         'drive': bool(GOOGLE_CLIENT_ID),
+        'serverGoogle': google_auth.get_manager().available(),
+        'worker': google_auth.get_manager().available(),
     })
 
 
@@ -200,14 +238,64 @@ def auth_password():
     return jsonify({'ok': True, 'user': session['user']})
 
 
+@app.get('/google/oauth/start')
+def google_oauth_start():
+    """Begin the server-side authorization-code flow (owner connects once)."""
+    if not session.get('user'):
+        return jsonify({'error': 'not_authenticated'}), 401
+    client_secret = os.environ.get('GOOGLE_CLIENT_SECRET', '')
+    if not GOOGLE_CLIENT_ID or not client_secret:
+        return jsonify({'error': 'server_google_not_configured',
+                        'detail': 'Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET'}), 400
+    state = secrets.token_urlsafe(24)
+    session['google_oauth_state'] = state
+    redirect_uri = request.host_url.rstrip('/') + '/google/oauth/callback'
+    from flask import redirect
+    return redirect(google_auth.build_auth_url(GOOGLE_CLIENT_ID, redirect_uri, state))
+
+
+@app.get('/google/oauth/callback')
+def google_oauth_callback():
+    from flask import redirect
+    if not session.get('user'):
+        return redirect('/?googleAuth=error&detail=not_authenticated')
+    state = request.args.get('state', '')
+    if not state or state != session.pop('google_oauth_state', None):
+        return redirect('/?googleAuth=error&detail=bad_state')
+    if request.args.get('error'):
+        return redirect(f"/?googleAuth=error&detail={request.args['error']}")
+    code = request.args.get('code', '')
+    if not code:
+        return redirect('/?googleAuth=error&detail=missing_code')
+    redirect_uri = request.host_url.rstrip('/') + '/google/oauth/callback'
+    try:
+        tokens = google_auth.exchange_code(
+            GOOGLE_CLIENT_ID, os.environ.get('GOOGLE_CLIENT_SECRET', ''), code, redirect_uri)
+    except google_auth.GoogleAuthError as e:
+        return redirect(f'/?googleAuth=error&detail={str(e)[:120]}')
+    google_auth.get_manager().store_tokens(tokens)
+    return redirect('/?googleAuth=connected')
+
+
 def _drive_token() -> str | None:
     return session.get('google_drive_token')
+
+
+def _google_token() -> str | None:
+    """Server-stored refresh-token credentials first, then the session token."""
+    mgr = google_auth.get_manager()
+    if mgr.available():
+        try:
+            return mgr.get_access_token()
+        except google_auth.GoogleAuthError:
+            pass  # fall back to the browser-granted session token
+    return _drive_token()
 
 
 def _drive_auth_error():
     if not session.get('user'):
         return jsonify({'error': 'not_authenticated'}), 401
-    if not _drive_token():
+    if not _google_token():
         return jsonify({'error': 'drive_not_authorized'}), 401
     return None
 
@@ -227,7 +315,8 @@ def drive_status():
         user = session['user']
     return jsonify({
         'authenticated': bool(user),
-        'driveAuthorized': bool(user and _drive_token()),
+        'driveAuthorized': bool(user and _google_token()),
+        'serverGoogleAuth': google_auth.get_manager().available(),
     })
 
 
@@ -259,11 +348,11 @@ def drive_browse():
     mode = request.args.get('mode', 'folders')
     try:
         if mode == 'images':
-            files = google_drive.list_images(_drive_token(), parent_id)
+            files = google_drive.list_images(_google_token(), parent_id)
         elif mode == 'all':
-            files = google_drive.list_all(_drive_token(), parent_id)
+            files = google_drive.list_all(_google_token(), parent_id)
         else:
-            files = google_drive.list_folders(_drive_token(), parent_id)
+            files = google_drive.list_folders(_google_token(), parent_id)
     except Exception as exc:
         return jsonify({'error': 'drive_list_failed', 'detail': str(exc)}), 502
     return jsonify({'parentId': parent_id, 'mode': mode, 'items': files})
@@ -278,7 +367,7 @@ def drive_download(file_id):
     mime_type = request.args.get('mimeType')
     try:
         body, resolved_name, resolved_mime = google_drive.stream_file(
-            _drive_token(),
+            _google_token(),
             file_id,
             filename=filename,
             mime_type=mime_type,
@@ -307,7 +396,7 @@ def drive_upload():
         return jsonify({'error': 'empty_file'}), 400
     try:
         created = google_drive.upload_file(
-            _drive_token(),
+            _google_token(),
             parent_id,
             upload.filename or 'upload.bin',
             payload,
@@ -316,6 +405,352 @@ def drive_upload():
     except Exception as exc:
         return jsonify({'error': 'drive_upload_failed', 'detail': str(exc)}), 502
     return jsonify({'ok': True, 'file': created})
+
+
+def _photos_auth_error():
+    if not session.get('user'):
+        return jsonify({'error': 'not_authenticated'}), 401
+    if not _google_token():
+        return jsonify({'error': 'photos_not_authorized',
+                        'detail': 'Connect Google via /google/oauth/start'}), 401
+    return None
+
+
+@app.get('/photos/albums')
+def photos_albums():
+    err = _photos_auth_error()
+    if err:
+        return err
+    try:
+        albums = google_photos.list_albums(_google_token())
+    except Exception as exc:
+        return jsonify({'error': 'photos_list_failed', 'detail': str(exc)}), 502
+    return jsonify({'albums': albums})
+
+
+@app.post('/photos/albums')
+def photos_create_album():
+    err = _photos_auth_error()
+    if err:
+        return err
+    data = request.get_json(silent=True) or {}
+    title = (data.get('title') or '').strip()
+    if not title:
+        return jsonify({'error': 'bad_request', 'detail': 'title is required'}), 400
+    try:
+        album = google_photos.create_album(_google_token(), title)
+    except Exception as exc:
+        return jsonify({'error': 'photos_create_failed', 'detail': str(exc)}), 502
+    return jsonify({'ok': True, 'album': album})
+
+
+@app.post('/photos/upload')
+def photos_upload():
+    err = _photos_auth_error()
+    if err:
+        return err
+    album_id = request.form.get('albumId') or ''
+    if not album_id:
+        return jsonify({'error': 'missing_album_id'}), 400
+    if 'file' not in request.files:
+        return jsonify({'error': 'missing_file'}), 400
+    upload = request.files['file']
+    payload = upload.read()
+    if not payload:
+        return jsonify({'error': 'empty_file'}), 400
+    filename = upload.filename or 'upload.jpg'
+    try:
+        token = _google_token()
+        upload_token = google_photos.upload_bytes(
+            token, filename, payload, upload.mimetype or 'image/jpeg')
+        results = google_photos.batch_create(token, album_id, [
+            {'uploadToken': upload_token, 'filename': filename},
+        ])
+    except Exception as exc:
+        return jsonify({'error': 'photos_upload_failed', 'detail': str(exc)}), 502
+    result = results[0] if results else {'ok': False, 'error': 'no result returned'}
+    if not result.get('ok'):
+        return jsonify({'error': 'photos_upload_failed',
+                        'detail': result.get('error', 'unknown')}), 502
+    return jsonify({'ok': True, 'filename': filename,
+                    'mediaItemId': result.get('mediaItemId')})
+
+
+# ---------------------------------------------------------------------------
+# Photo sessions (P6): session, run, photo, and settings routes
+# ---------------------------------------------------------------------------
+
+def _session_run_active(session_id) -> bool:
+    row = db.get().execute(
+        'SELECT id FROM runs WHERE session_id = ? AND status = ?',
+        (session_id, 'running')).fetchone()
+    return row is not None
+
+
+def _photo_row_to_dict(row: dict) -> dict:
+    """Map a raw `photos` row (snake_case) to a camelCase API photo."""
+    def _parse_json(value):
+        if not value:
+            return None
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else None
+        except ValueError:
+            return None
+    return {
+        'id': row['id'],
+        'runId': row['run_id'],
+        'driveFileId': row['drive_file_id'],
+        'filename': row['filename'],
+        'state': row['state'],
+        'overallScore': row['overall_score'],
+        'metrics': _parse_json(row['metrics_json']),
+        'edit': _parse_json(row['edit_json']),
+        'exportedFileId': row['exported_file_id'],
+        'errorCode': row['error_code'],
+        'errorDetail': row['error_detail'],
+        'attempts': row['attempts'],
+        'claimedAt': row['claimed_at'],
+        'updatedAt': row['updated_at'],
+    }
+
+
+@app.get('/sessions')
+def sessions_list():
+    return jsonify({'sessions': sessions.list_all()})
+
+
+@app.post('/sessions')
+def sessions_create():
+    data = request.get_json(silent=True) or {}
+    try:
+        created = sessions.create(data)
+    except sessions.SessionError as e:
+        return jsonify({'error': 'bad_config', 'detail': str(e)}), 400
+    return jsonify({'ok': True, 'session': created})
+
+
+@app.get('/sessions/<int:session_id>')
+def sessions_get(session_id):
+    s = sessions.get(session_id)
+    if s is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'session not found: {session_id}'}), 404
+    return jsonify({'session': s})
+
+
+@app.put('/sessions/<int:session_id>')
+def sessions_update(session_id):
+    s = sessions.get(session_id)
+    if s is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'session not found: {session_id}'}), 404
+    data = request.get_json(silent=True) or {}
+    if _session_run_active(session_id):
+        # Re-pointing folders mid-run would strand the running worker.
+        if any(k in data for k in ('sourceFolderId', 'exportFolderId')):
+            return jsonify({'error': 'run_in_progress',
+                            'detail': 'stop the active run before changing '
+                                      'this session\'s folders'}), 409
+    try:
+        updated = sessions.update(session_id, data)
+    except sessions.SessionError as e:
+        return jsonify({'error': 'bad_config', 'detail': str(e)}), 400
+    return jsonify({'ok': True, 'session': updated})
+
+
+@app.delete('/sessions/<int:session_id>')
+def sessions_delete(session_id):
+    if sessions.get(session_id) is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'session not found: {session_id}'}), 404
+    if _session_run_active(session_id):
+        return jsonify({'error': 'run_in_progress',
+                        'detail': 'stop the active run before deleting this session'}), 409
+    sessions.delete(session_id)
+    return jsonify({'ok': True})
+
+
+@app.post('/sessions/<int:session_id>/preflight')
+def sessions_preflight(session_id):
+    s = sessions.get(session_id)
+    if s is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'session not found: {session_id}'}), 404
+    if not google_auth.get_manager().available():
+        return jsonify({'error': 'server_google_not_connected',
+                        'detail': 'Connect via /google/oauth/start first'}), 401
+    checks = preflight.run(s, _google_token)
+    return jsonify({'checks': checks})
+
+
+@app.post('/sessions/<int:session_id>/start')
+def sessions_start(session_id):
+    s = sessions.get(session_id)
+    if s is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'session not found: {session_id}'}), 404
+    if not google_auth.get_manager().available():
+        return jsonify({'error': 'server_google_not_connected',
+                        'detail': 'Connect via /google/oauth/start first'}), 401
+    try:
+        result = pipeline.start_run(session_id, _google_token)
+    except pipeline.RunConflict as e:
+        return jsonify({'error': 'already_running', 'detail': str(e)}), 409
+    return jsonify({'ok': True, **result})
+
+
+@app.get('/runs/active')
+def runs_active():
+    return jsonify(pipeline.active_status())
+
+
+@app.post('/runs/active/stop')
+def runs_active_stop():
+    stopped = pipeline.stop_run()
+    return jsonify({'ok': True, 'stopped': stopped})
+
+
+@app.get('/runs/<int:run_id>/photos')
+def runs_photos(run_id):
+    conn = db.get()
+    run = conn.execute('SELECT id FROM runs WHERE id = ?', (run_id,)).fetchone()
+    if run is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'run not found: {run_id}'}), 404
+    state = request.args.get('state')
+    limit = request.args.get('limit')
+    offset = request.args.get('offset')
+    query = 'SELECT * FROM photos WHERE run_id = ?'
+    params = [run_id]
+    if state:
+        query += ' AND state = ?'
+        params.append(state)
+    query += ' ORDER BY id'
+    try:
+        if limit:
+            query += ' LIMIT ?'
+            params.append(int(limit))
+            if offset:
+                query += ' OFFSET ?'
+                params.append(int(offset))
+    except ValueError:
+        return jsonify({'error': 'bad_config',
+                        'detail': 'limit and offset must be integers'}), 400
+    rows = conn.execute(query, params).fetchall()
+    return jsonify({'photos': [_photo_row_to_dict(r) for r in rows]})
+
+
+@app.post('/runs/<int:run_id>/approve-all')
+def runs_approve_all(run_id):
+    conn = db.get()
+    run = conn.execute('SELECT id FROM runs WHERE id = ?', (run_id,)).fetchone()
+    if run is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'run not found: {run_id}'}), 404
+    try:
+        count = pipeline.approve_all(run_id)
+    except pipeline.RunNotActive as e:
+        return jsonify({'error': 'run_not_active', 'detail': str(e)}), 409
+    return jsonify({'ok': True, 'count': count})
+
+
+@app.post('/photos/<int:photo_id>/decision')
+def photos_decision(photo_id):
+    data = request.get_json(silent=True) or {}
+    decision = data.get('decision')
+    try:
+        row = pipeline.apply_decision(photo_id, decision)
+    except KeyError:
+        return jsonify({'error': 'not_found',
+                        'detail': f'photo not found: {photo_id}'}), 404
+    except ValueError as e:
+        return jsonify({'error': 'bad_config', 'detail': str(e)}), 400
+    except pipeline.RunNotActive as e:
+        return jsonify({'error': 'run_not_active', 'detail': str(e)}), 409
+    return jsonify({'ok': True, 'photo': _photo_row_to_dict(row)})
+
+
+@app.get('/photos/<int:photo_id>/thumb')
+def photos_thumb(photo_id):
+    """Proxy the Drive file through the server token; never redirect to Google."""
+    if not google_auth.get_manager().available():
+        return jsonify({'error': 'server_google_not_connected',
+                        'detail': 'Connect via /google/oauth/start first'}), 401
+    row = db.get().execute(
+        'SELECT drive_file_id, filename FROM photos WHERE id = ?',
+        (photo_id,)).fetchone()
+    if row is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'photo not found: {photo_id}'}), 404
+    try:
+        body, resolved_name, resolved_mime = google_drive.stream_file(
+            _google_token(), row['drive_file_id'], filename=row['filename'])
+    except Exception as exc:
+        return jsonify({'error': 'drive_error', 'detail': str(exc)}), 502
+    return Response(body, mimetype=resolved_mime, headers={
+        'Content-Disposition': f'inline; filename="{resolved_name}"',
+        'Cache-Control': 'private, max-age=3600',
+    })
+
+
+@app.get('/drive/folders')
+def drive_folders_browse():
+    """Browse subfolders of a parent. Distinct from /drive/browse (P6 spec)."""
+    err = _drive_auth_error()
+    if err:
+        return err
+    parent = request.args.get('parent') or 'root'
+    try:
+        folders = google_drive.list_folders(_google_token(), parent)
+    except Exception as exc:
+        return jsonify({'error': 'drive_error', 'detail': str(exc)}), 502
+    return jsonify({'parent': parent, 'items': folders})
+
+
+@app.post('/drive/folders')
+def drive_folders_create():
+    err = _drive_auth_error()
+    if err:
+        return err
+    data = request.get_json(silent=True) or {}
+    parent_id = (data.get('parentId') or '').strip()
+    name = (data.get('name') or '').strip()
+    if not parent_id or not name:
+        return jsonify({'error': 'bad_config',
+                        'detail': 'parentId and name are required'}), 400
+    try:
+        folder = google_drive.create_folder(_google_token(), parent_id, name)
+    except Exception as exc:
+        return jsonify({'error': 'drive_error', 'detail': str(exc)}), 502
+    return jsonify({'ok': True, 'folder': folder})
+
+
+# Known app-wide wiring keys: {public API name: app_settings key}.
+_SETTINGS_KEYS = (
+    ('inboxFolderId', 'inbox_folder_id'),
+    ('inboxFolderName', 'inbox_folder_name'),
+    ('sessionsRoot', 'sessions_root_folder_id'),
+)
+
+
+def _settings_payload() -> dict:
+    return {public: sessions.get_setting(key) for public, key in _SETTINGS_KEYS}
+
+
+@app.get('/settings')
+def settings_get():
+    return jsonify(_settings_payload())
+
+
+@app.put('/settings')
+def settings_put():
+    data = request.get_json(silent=True) or {}
+    for public, key in _SETTINGS_KEYS:
+        if public in data:
+            value = data[public]
+            sessions.set_setting(key, '' if value is None else str(value))
+    return jsonify(_settings_payload())
 
 
 @app.route('/', defaults={'path': ''})
@@ -328,267 +763,6 @@ def serve_frontend(path):
     if path and os.path.isfile(full):
         return send_from_directory(FRONTEND_DIST, path)
     return send_from_directory(FRONTEND_DIST, 'index.html')
-
-# Load Haar cascades once at startup (bundled with cv2)
-FACE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-EYE_CASCADE  = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
-
-
-# ---------------------------------------------------------------------------
-# Image decoding
-# ---------------------------------------------------------------------------
-
-MAX_SCORING_DIM = 1000  # px — sufficient for all scoring metrics, optimized for speed
-
-def decode_image(img_bytes: bytes) -> np.ndarray:
-    """
-    Decode JPEG/PNG bytes → grayscale, capped at MAX_SCORING_DIM.
-    Raises ValueError if decode fails.
-    """
-    if not img_bytes or len(img_bytes) < 32:
-        raise ValueError(f"empty or truncated upload ({len(img_bytes) if img_bytes else 0} bytes)")
-    arr = np.frombuffer(img_bytes, dtype=np.uint8)
-    gray = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
-    if gray is None:
-        raise ValueError("cv2.imdecode returned None — not a valid image")
-    h, w = gray.shape[:2]
-    if max(h, w) > MAX_SCORING_DIM:
-        scale = MAX_SCORING_DIM / max(h, w)
-        gray = cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-    return gray
-
-
-# ---------------------------------------------------------------------------
-# Scoring functions — all accept a decoded grayscale ndarray
-# ---------------------------------------------------------------------------
-
-def score_sharpness(gray: np.ndarray) -> float:
-    """Laplacian variance — raw value, normalized per-batch by caller."""
-    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
-
-
-def score_exposure(gray: np.ndarray) -> dict:
-    """
-    Exposure quality based on luminance histogram.
-
-    Returns mean_brightness, clipping percentages, and a 0–1 score where
-    1 = well-exposed. Penalises blown highlights more than crushed shadows
-    (highlights are unrecoverable in post).
-    """
-    total = gray.size
-    mean = float(gray.mean())
-
-    highlight_pct = float(np.sum(gray >= 250) / total * 100)
-    shadow_pct    = float(np.sum(gray <= 5)   / total * 100)
-
-    # Score peaks at mean ≈ 118 (slight "expose to the right" bias)
-    norm_mean    = mean / 255.0
-    center_score = max(0.0, min(1.0, 1.0 - abs(norm_mean - 0.46) * 1.8))
-    clip_penalty = min(0.5, highlight_pct / 100 * 4.0 + shadow_pct / 100 * 1.0)
-    exposure_score = round(max(0.0, center_score - clip_penalty), 4)
-
-    return {
-        "mean_brightness":    round(mean, 1),
-        "highlight_clip_pct": round(highlight_pct, 2),
-        "shadow_clip_pct":    round(shadow_pct, 2),
-        "exposure_score":     exposure_score,
-    }
-
-
-def score_noise(gray: np.ndarray) -> dict:
-    """
-    Noise estimate using the Donoho (1994) high-pass sigma estimator.
-    sigma = median(|H|) / 0.6745, where H is the Laplacian-filtered image.
-
-    Returns noise_sigma and a 0–1 score where 1 = clean.
-    """
-    kernel   = np.array([[1, -2, 1], [-2, 4, -2], [1, -2, 1]], dtype=np.float32)
-    filtered = cv2.filter2D(gray.astype(np.float32), -1, kernel)
-    sigma    = float(np.median(np.abs(filtered)) / 0.6745)
-
-    # sigma ≈ 1–2: very clean, 5–10: moderate, 15+: noisy
-    noise_score = round(float(np.clip(1.0 - sigma / 15.0, 0.0, 1.0)), 4)
-
-    return {
-        "noise_sigma": round(sigma, 3),
-        "noise_score": noise_score,
-    }
-
-
-def score_contrast(gray: np.ndarray) -> dict:
-    """
-    RMS contrast = standard deviation of pixel values, normalised to 0–1.
-    std ≈ 20: flat/hazy, 60: typical, 80+: punchy.
-    """
-    rms = float(gray.std())
-    contrast_score = round(float(np.clip(rms / 80.0, 0.0, 1.0)), 4)
-
-    return {
-        "rms_contrast":   round(rms, 2),
-        "contrast_score": contrast_score,
-    }
-
-
-def score_faces(gray: np.ndarray) -> dict:
-    """
-    Face + eye detection via Haar cascades.
-
-    Downscales to max 800px for speed.
-    Returns face_count, eyes_open, subject_score, and primary_face_box
-    (normalised 0–1 coords of largest face, for composition scoring).
-    """
-    h, w = gray.shape
-    scale = min(1.0, 800.0 / max(h, w))
-    small = cv2.resize(gray, (int(w * scale), int(h * scale))) if scale < 1.0 else gray
-
-    faces = FACE_CASCADE.detectMultiScale(
-        small, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
-    )
-    if not isinstance(faces, np.ndarray) or len(faces) == 0:
-        return {
-            "face_count":      0,
-            "eyes_open":       None,
-            "subject_score":   None,
-            "primary_face_box": None,
-        }
-
-    face_count = len(faces)
-    any_eyes_open = False
-    sh, sw = small.shape
-
-    # Pick largest face as primary
-    areas = [fw * fh for (fx, fy, fw, fh) in faces]
-    primary = faces[int(np.argmax(areas))]
-    fx, fy, fw, fh = primary
-    primary_face_box = {
-        "cx": round((fx + fw / 2) / sw, 4),
-        "cy": round((fy + fh / 2) / sh, 4),
-        "w":  round(fw / sw, 4),
-        "h":  round(fh / sh, 4),
-    }
-
-    for (fx2, fy2, fw2, fh2) in faces:
-        roi = small[fy2:fy2 + fh2, fx2:fx2 + fw2]
-        eyes = EYE_CASCADE.detectMultiScale(roi, scaleFactor=1.1, minNeighbors=3)
-        if isinstance(eyes, np.ndarray) and len(eyes) >= 2:
-            any_eyes_open = True
-            break
-
-    subject_score = 1.0 if any_eyes_open else 0.4
-
-    return {
-        "face_count":       face_count,
-        "eyes_open":        any_eyes_open,
-        "subject_score":    round(subject_score, 4),
-        "primary_face_box": primary_face_box,
-    }
-
-
-def compute_phash(gray: np.ndarray) -> int:
-    """
-    DCT-based perceptual hash (64-bit integer).
-    Resize → 32x32, DCT, take 8x8 low-frequency block,
-    threshold against mean → 64 bits packed into an int.
-    """
-    resized = cv2.resize(gray, (32, 32), interpolation=cv2.INTER_AREA)
-    dct     = cv2.dct(resized.astype(np.float32))
-    block   = dct[:8, :8].flatten()
-    mean    = (block.sum() - block[0]) / 63.0  # exclude DC component
-    bits    = block > mean
-    return int(sum(int(b) << i for i, b in enumerate(bits)))
-
-
-def hamming_distance(h1: int, h2: int) -> int:
-    return bin(h1 ^ h2).count('1')
-
-
-def score_composition(gray: np.ndarray, primary_face_box: dict | None) -> dict:
-    """
-    Composition quality: rule-of-thirds subject placement + horizon levelness.
-
-    Subject position: uses face centre if available, else gradient-weighted
-    visual centroid. Scores how close the subject is to a rule-of-thirds
-    intersection (0.333, 0.333), (0.333, 0.667), (0.667, 0.333), (0.667, 0.667).
-
-    Horizon: Hough probabilistic lines on Canny edges; dominant near-horizontal
-    line angle. Level (< 1°) = 1.0; ±10° = 0.5; > 15° = 0.2 (could be artistic).
-    """
-    h, w = gray.shape
-
-    # ---- Subject position ----
-    if primary_face_box:
-        sx, sy = primary_face_box["cx"], primary_face_box["cy"]
-    else:
-        # Gradient-weighted centroid as proxy for visual interest
-        gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
-        gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-        mag = np.sqrt(gx ** 2 + gy ** 2)
-        total = float(mag.sum()) or 1.0
-        ys_idx, xs_idx = np.mgrid[0:h, 0:w]
-        sx = float((mag * xs_idx).sum() / total) / w
-        sy = float((mag * ys_idx).sum() / total) / h
-
-    thirds = [(1/3, 1/3), (1/3, 2/3), (2/3, 1/3), (2/3, 2/3)]
-    min_dist = min(((sx - tx)**2 + (sy - ty)**2)**0.5 for (tx, ty) in thirds)
-    # Max possible distance from any thirds point ≈ 0.47 (corner to far intersection)
-    thirds_score = round(float(max(0.0, 1.0 - min_dist / 0.47)), 4)
-
-    # ---- Horizon / tilt ----
-    small_h = cv2.resize(gray, (640, int(h * 640 / w))) if w > 640 else gray
-    edges   = cv2.Canny(small_h, 50, 150)
-    lines   = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=60,
-                               minLineLength=80, maxLineGap=20)
-
-    horizon_angle  = 0.0
-    horizon_score  = 1.0   # default: assume level if no lines found
-
-    if lines is not None:
-        angles = []
-        lengths = []
-        for line in lines:
-            x1, y1, x2, y2 = line[0]
-            angle = float(np.degrees(np.arctan2(y2 - y1, x2 - x1)))
-            length = float(((x2-x1)**2 + (y2-y1)**2)**0.5)
-            # Only near-horizontal lines (within ±30°)
-            if abs(angle) <= 30:
-                angles.append(angle)
-                lengths.append(length)
-
-        if angles:
-            horizon_angle = round(float(np.average(angles, weights=lengths)), 2)
-            abs_angle = abs(horizon_angle)
-            if abs_angle < 1.0:
-                horizon_score = 1.0
-            elif abs_angle < 5.0:
-                horizon_score = round(1.0 - (abs_angle - 1.0) / 4.0 * 0.4, 4)
-            elif abs_angle < 15.0:
-                horizon_score = round(0.6 - (abs_angle - 5.0) / 10.0 * 0.4, 4)
-            else:
-                horizon_score = 0.2   # steep tilt — could be artistic, not penalised to 0
-
-    composition_score = round(0.6 * thirds_score + 0.4 * horizon_score, 4)
-
-    return {
-        "subject_x":        round(sx, 4),
-        "subject_y":        round(sy, 4),
-        "thirds_score":     thirds_score,
-        "horizon_angle":    horizon_angle,
-        "horizon_score":    round(horizon_score, 4),
-        "composition_score": composition_score,
-    }
-
-
-def composite_score(sharpness: float, exposure: float,
-                    noise: float, contrast: float) -> float:
-    """
-    Weighted overall quality score.
-      Focus      40% — most critical, hardest to fix in post
-      Exposure   30% — important but recoverable with RAW
-      Noise      20% — visible at 100%, worsens with editing
-      Contrast   10% — easily adjusted in post
-    """
-    return round(0.40 * sharpness + 0.30 * exposure +
-                 0.20 * noise     + 0.10 * contrast, 4)
 
 
 # ---------------------------------------------------------------------------
@@ -687,49 +861,10 @@ def rank():
             img_bytes = file_obj.read()
             tasks.append((entry_id, filename, img_bytes))
 
-        # ---- Decode + score concurrently ----
-        raw_results: List[dict] = []
+        # ---- Score all images via extracted core ----
+        results, ranking_errors = scoring.rank_images(tasks)
 
-        def process_image(task):
-            t_id, t_filename, t_bytes = task
-            try:
-                gray = decode_image(t_bytes)
-                subj = score_faces(gray)
-                res = {
-                    "id":           t_id,
-                    "filename":     t_filename,
-                    "sharpness_raw": score_sharpness(gray),
-                    "exposure":     score_exposure(gray),
-                    "noise":        score_noise(gray),
-                    "contrast":     score_contrast(gray),
-                    "subject":      subj,
-                    "composition":  score_composition(gray, subj.get("primary_face_box")),
-                    "phash":        compute_phash(gray),
-                }
-                # Explicit cleanup
-                del gray
-                return res
-            except Exception as exc:
-                return {"error": str(exc), "id": t_id, "filename": t_filename}
-
-        ranking_errors: List[dict] = []
-
-        # OpenCV releases GIL, so multithreading scales well.
-        workers = min(32, (os.cpu_count() or 4) * 2)
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            for result in executor.map(process_image, tasks):
-                if "error" in result:
-                    ranking_errors.append({
-                        "id":       result["id"],
-                        "filename": result["filename"],
-                        "detail":   result["error"],
-                    })
-                else:
-                    raw_results.append(result)
-
-        gc.collect()
-
-        if not raw_results:
+        if not results:
             if ranking_errors:
                 first = ranking_errors[0]
                 return jsonify({
@@ -748,77 +883,6 @@ def rank():
                 "duration_ms":      int((time.perf_counter() - start) * 1000),
             })
 
-        # ---- Normalise sharpness across the batch (p99) ----
-        sharp_vals = np.array([r["sharpness_raw"] for r in raw_results])
-        p99        = float(np.percentile(sharp_vals, 99)) or 1.0
-        norm_sharp = np.clip(sharp_vals / p99, 0.0, 1.0)
-
-        # ---- Burst grouping via pHash Hamming distance ----
-        BURST_THRESHOLD = 10   # bits out of 64 — similar photos within a burst
-        burst_groups: list[dict] = []  # [{hash, ids: []}]
-        id_to_burst: dict[str, int] = {}  # id → group index (0-based)
-
-        for r in raw_results:
-            ph = r["phash"]
-            assigned = None
-            for g in burst_groups:
-                if hamming_distance(ph, g["hash"]) <= BURST_THRESHOLD:
-                    assigned = g
-                    break
-            if assigned is None:
-                burst_groups.append({"hash": ph, "ids": [r["id"]]})
-                id_to_burst[r["id"]] = len(burst_groups) - 1
-            else:
-                assigned["ids"].append(r["id"])
-                id_to_burst[r["id"]] = burst_groups.index(assigned)
-
-        # ---- Build final results with composite score ----
-        results = []
-        for r, ns in zip(raw_results, norm_sharp):
-            exp_score   = r["exposure"]["exposure_score"]
-            noise_score = r["noise"]["noise_score"]
-            cont_score  = r["contrast"]["contrast_score"]
-            overall     = composite_score(float(ns), exp_score, noise_score, cont_score)
-
-            # Apply blink penalty: face detected but eyes closed → halve the score
-            subj = r["subject"]
-            if subj["face_count"] > 0 and subj["eyes_open"] is False:
-                overall = round(overall * 0.5, 4)
-
-            group_idx  = id_to_burst[r["id"]]
-            group_size = len(burst_groups[group_idx]["ids"])
-            burst_group = group_idx + 1 if group_size > 1 else None  # None = unique photo
-
-            results.append({
-                "id":            r["id"],
-                "filename":      r["filename"],
-                "sharpness":     round(float(ns), 4),
-                "overall_score": overall,
-                "exposure":      r["exposure"],
-                "noise":         r["noise"],
-                "contrast":      r["contrast"],
-                "subject":       subj,
-                "composition":   r["composition"],
-                "burst_group":   burst_group,
-                "burst_size":    group_size if group_size > 1 else None,
-            })
-
-        # Sort by overall_score descending; assign rank + best-in-burst flag
-        results.sort(key=lambda x: -x["overall_score"])
-        seen_burst_groups: set[int] = set()
-        for i, item in enumerate(results, 1):
-            item["rank"] = i
-            bg = item["burst_group"]
-            if bg is None:
-                # Single-image "group" — not a burst; always eligible for export filters
-                item["is_burst_best"] = True
-            elif bg not in seen_burst_groups:
-                # First (highest score) seen for this burst group
-                item["is_burst_best"] = True
-                seen_burst_groups.add(bg)
-            else:
-                item["is_burst_best"] = False
-
         return jsonify({
             "results":          results,
             "ranking_errors":   ranking_errors,
@@ -828,6 +892,109 @@ def rank():
 
     except Exception as e:
         return jsonify({"error": "internal_error", "detail": str(e)}), 500
+
+
+@app.post("/edit")
+def edit():
+    """Run Topaz on one local image (LOCAL ONLY). Non-destructive.
+
+    Body (JSON):
+      source_dir    — absolute path to the folder holding the image (required)
+      filename      — bare filename within source_dir (required)
+      enhancements  — {"sharpen": true, "noise": true, ...}; if omitted and
+                      `iso` is given, defaults come from route_by_iso(iso)
+      iso           — EXIF ISO, used only when enhancements omitted
+      format/quality/overwrite — passed through to the wrapper
+    Writes to <source_dir>/edited/ and returns the edited filename + fetch URL.
+
+    Path model (why the NOSONAR markers on the isdir checks below, here and
+    in edit_file(), are justified): source_dir is realpath-canonicalized
+    immediately on receipt, and _safe_in_dir() still guards every filename
+    joined under it against traversal. But source_dir itself is
+    intentionally allowed to be any local folder — this route exists so the
+    desktop UI can edit whatever folder the user picked via their browser's
+    own File System Access API, which is unpredictable from the server's
+    side by design. This app's real security boundary is enforce_auth()
+    (BBP_PASSWORD or the Google email allowlist), not per-route path
+    sandboxing: every other authenticated route already has equivalent
+    reach (arbitrary Drive folder configuration, the server's own Drive
+    OAuth tokens, etc.) — restricting only this route to a fixed root would
+    both break the picker-driven workflow and not meaningfully change the
+    app's actual trust boundary. See backend/audit.py's module docstring
+    for the same reasoning applied to this app's local-only CLI tools.
+    """
+    data = request.get_json(silent=True) or {}
+    source_dir = data.get("source_dir")
+    filename = data.get("filename")
+    if not source_dir or not filename:
+        return jsonify({"error": "bad_request", "detail": "source_dir and filename are required"}), 400
+    # Canonicalize once, immediately, before it's used in any filesystem
+    # check below — matches _safe_in_dir's own realpath-based guard.
+    source_dir = os.path.realpath(source_dir)
+    if not os.path.isdir(source_dir):  # NOSONAR see docstring above
+        return jsonify({"error": "not_found", "detail": f"source_dir does not exist: {source_dir}"}), 404
+
+    try:
+        input_path = _safe_in_dir(source_dir, filename)
+    except ValueError as e:
+        return jsonify({"error": "bad_request", "detail": str(e)}), 400
+    if not os.path.isfile(input_path):
+        return jsonify({"error": "not_found", "detail": f"file not found: {filename}"}), 404
+
+    enhancements = data.get("enhancements")
+    if enhancements is None:
+        enhancements = topaz.route_by_iso(data.get("iso"))
+
+    output_dir = os.path.join(source_dir, EDITED_SUBDIR)
+    try:
+        result = topaz.process(
+            inputs=[input_path],
+            output_dir=output_dir,
+            enhancements=enhancements,
+            fmt=data.get("format"),
+            quality=data.get("quality"),
+            overwrite=bool(data.get("overwrite", False)),
+            timeout_s=float(data.get("timeout_s", 600.0)),
+        )
+    except topaz.TopazError as e:
+        return jsonify({"error": "edit_config_error", "detail": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": "internal_error", "detail": str(e)}), 500
+
+    payload = result.to_dict()
+    payload["enhancements"] = enhancements
+    if result.ok and result.outputs:
+        edited_name = os.path.basename(result.outputs[0])
+        payload["edited_filename"] = edited_name
+        payload["edited_url"] = f"/edit/file?dir={source_dir}&name={edited_name}&variant=edited"
+        payload["original_url"] = f"/edit/file?dir={source_dir}&name={filename}&variant=original"
+    status_code = 200 if result.ok else 422
+    return jsonify(payload), status_code
+
+
+@app.get("/edit/file")
+def edit_file():
+    """Serve an original or edited image for the before/after viewer (LOCAL ONLY).
+
+    Same path model as edit() above — see that route's docstring.
+    """
+    source_dir = request.args.get("dir")
+    name = request.args.get("name")
+    variant = request.args.get("variant", "original")
+    if not source_dir or not name:
+        return jsonify({"error": "bad_request", "detail": "dir and name are required"}), 400
+    serve_dir = os.path.realpath(source_dir)
+    if variant == "edited":
+        serve_dir = os.path.join(serve_dir, EDITED_SUBDIR)
+    if not os.path.isdir(serve_dir):  # NOSONAR see edit()'s docstring above
+        return jsonify({"error": "not_found", "detail": "directory not found"}), 404
+    try:
+        full_path = _safe_in_dir(serve_dir, name)  # traversal guard; use its return, not a fresh join
+    except ValueError as e:
+        return jsonify({"error": "bad_request", "detail": str(e)}), 400
+    if not os.path.isfile(full_path):
+        return jsonify({"error": "not_found", "detail": "file not found"}), 404
+    return send_from_directory(serve_dir, name)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ const navItems = [
   { label: 'DEVELOP', route: '/cull',     icon: 'tune' },
   { label: 'REVIEW',  route: '/compare',  icon: 'visibility' },
   { label: 'EXPORT',  route: '/review',   icon: 'ios_share' },
+  { label: 'SESSIONS', route: '/sessions', icon: 'photo_camera' },
 ]
 
 export default function BottomNavBar() {

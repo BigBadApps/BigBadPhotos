@@ -35,7 +35,7 @@ function PollCountdown({ lastPollAt, pollIntervalSec = 30 }) {
   return <span className="mono fs-xxs" style={{ color: 'var(--fg-4)' }}>next scan in {left}s</span>
 }
 
-export default function AutonomousPanel({
+function LegacyAutonomousPanel({
   enabled, canEnable, phase,
   processedCount, skippedCount, newArrivals,
   lastPollAt, errors,
@@ -196,4 +196,8 @@ export default function AutonomousPanel({
       )}
     </div>
   )
+}
+
+export default function AutonomousPanel(props) {
+  return <LegacyAutonomousPanel {...props} />
 }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import mimetypes
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -20,6 +21,15 @@ FOLDER_MIME = 'application/vnd.google-apps.folder'
 
 def _headers(access_token: str) -> dict[str, str]:
     return {'Authorization': f'Bearer {access_token}'}
+
+
+def _files_url(file_id: str) -> str:
+    """Build a `.../files/{id}` URL with the id properly path-encoded.
+
+    file_id ultimately traces back to request/route input in some callers
+    (e.g. `/drive/files/<file_id>`) — quote() prevents a crafted id from
+    injecting extra path segments into the Drive API request."""
+    return f'{DRIVE_API}/files/{quote(file_id, safe="")}'
 
 
 def verify_access_token(access_token: str) -> dict[str, Any]:
@@ -94,7 +104,7 @@ def _resolve_file_meta(
         return name, mime
 
     meta = requests.get(
-        f'{DRIVE_API}/files/{file_id}',
+        _files_url(file_id),
         headers=_headers(access_token),
         params={'fields': 'id,name,mimeType'},
         timeout=30,
@@ -118,7 +128,7 @@ def download_file(
         mime_type=mime_type,
     )
     content = requests.get(
-        f'{DRIVE_API}/files/{file_id}',
+        _files_url(file_id),
         headers=_headers(access_token),
         params={'alt': 'media'},
         timeout=120,
@@ -141,7 +151,7 @@ def stream_file(
         mime_type=mime_type,
     )
     content = requests.get(
-        f'{DRIVE_API}/files/{file_id}',
+        _files_url(file_id),
         headers=_headers(access_token),
         params={'alt': 'media'},
         timeout=120,
@@ -166,11 +176,14 @@ def upload_file(
     filename: str,
     data: bytes,
     mime_type: str | None = None,
+    app_properties: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     import json
 
     mime = mime_type or mimetypes.guess_type(filename)[0] or 'application/octet-stream'
     metadata = {'name': filename, 'parents': [parent_id]}
+    if app_properties:
+        metadata['appProperties'] = app_properties
     boundary = 'bbp_drive_upload_boundary'
     meta_json = json.dumps(metadata).encode('utf-8')
     body = b''.join([
@@ -239,3 +252,148 @@ def _is_supported_image(name: str, mime: str) -> bool:
     if ext in IMAGE_EXTENSIONS:
         return True
     return mime.startswith('image/')
+
+
+def create_folder(access_token: str, parent_id: str, name: str) -> dict[str, Any]:
+    resp = requests.post(
+        f'{DRIVE_API}/files',
+        headers=_headers(access_token),
+        params={'fields': 'id,name', 'supportsAllDrives': 'true'},
+        json={
+            'name': name,
+            'mimeType': FOLDER_MIME,
+            'parents': [parent_id],
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return {'id': data.get('id'), 'name': data.get('name')}
+
+
+def find_child_by_name(
+    access_token: str,
+    parent_id: str,
+    name: str,
+    folders_only: bool = False,
+) -> dict[str, Any] | None:
+    escaped_name = name.replace("'", "\\'")
+    q = (
+        f"'{parent_id}' in parents and trashed = false "
+        f"and name = '{escaped_name}'"
+    )
+    if folders_only:
+        q += f" and mimeType = '{FOLDER_MIME}'"
+    resp = requests.get(
+        f'{DRIVE_API}/files',
+        headers=_headers(access_token),
+        params={
+            'q': q,
+            'fields': 'files(id,name,mimeType)',
+            'pageSize': 1,
+            'supportsAllDrives': 'true',
+            'includeItemsFromAllDrives': 'true',
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    files = resp.json().get('files', [])
+    return files[0] if files else None
+
+
+def find_by_app_property(
+    access_token: str,
+    parent_id: str,
+    key: str,
+    value: str,
+) -> dict[str, Any] | None:
+    """Find a child of `parent_id` tagged with a given appProperties key/value.
+
+    Unlike find_child_by_name, this is safe as a per-item idempotency check
+    even when multiple items share a filename: appProperties are set once at
+    upload time (see upload_file's app_properties param) with a value that's
+    unique to the caller's own record (e.g. a database row id), not derived
+    from the filename. A retry after a lost response can look up "did *my*
+    upload for *this specific row* already land" without any risk of a
+    same-named-but-different item satisfying the check.
+    """
+    escaped_key = key.replace("'", "\\'")
+    escaped_value = value.replace("'", "\\'")
+    q = (
+        f"'{parent_id}' in parents and trashed = false "
+        f"and appProperties has {{ key='{escaped_key}' and value='{escaped_value}' }}"
+    )
+    resp = requests.get(
+        f'{DRIVE_API}/files',
+        headers=_headers(access_token),
+        params={
+            'q': q,
+            'fields': 'files(id,name,mimeType)',
+            'pageSize': 1,
+            'supportsAllDrives': 'true',
+            'includeItemsFromAllDrives': 'true',
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    files = resp.json().get('files', [])
+    return files[0] if files else None
+
+
+def ensure_folder(access_token: str, parent_id: str, name: str) -> dict[str, Any]:
+    found = find_child_by_name(access_token, parent_id, name, folders_only=True)
+    if found:
+        return found
+    return create_folder(access_token, parent_id, name)
+
+
+def move_file(
+    access_token: str,
+    file_id: str,
+    new_parent_id: str,
+    old_parent_id: str | None = None,
+) -> dict[str, Any]:
+    if old_parent_id is None:
+        meta = requests.get(
+            _files_url(file_id),
+            headers=_headers(access_token),
+            params={'fields': 'parents', 'supportsAllDrives': 'true'},
+            timeout=30,
+        )
+        meta.raise_for_status()
+        old_parent_id = ','.join(meta.json().get('parents', []))
+
+    resp = requests.patch(
+        _files_url(file_id),
+        headers=_headers(access_token),
+        params={
+            'addParents': new_parent_id,
+            'removeParents': old_parent_id,
+            'fields': 'id,name,parents',
+            'supportsAllDrives': 'true',
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def folder_meta(access_token: str, folder_id: str) -> dict[str, Any]:
+    resp = requests.get(
+        _files_url(folder_id),
+        headers=_headers(access_token),
+        params={
+            'fields': 'id,name,trashed,capabilities(canAddChildren)',
+            'supportsAllDrives': 'true',
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    capabilities = data.get('capabilities') or {}
+    return {
+        'id': data.get('id'),
+        'name': data.get('name'),
+        'canAddChildren': bool(capabilities.get('canAddChildren')),
+        'trashed': bool(data.get('trashed', False)),
+    }

@@ -1,17 +1,23 @@
 import { useCallback, useEffect, useState } from 'react'
 import Icon from './Icon'
 import { browseDrive } from '../utils/googleDrive'
+import { createDriveFolder } from '../api/sessionsClient'
 
 export default function GoogleDriveFolderPicker({
   open,
   title,
   onClose,
   onSelect,
+  allowCreate = true,
 }) {
   const [trail, setTrail] = useState([{ id: 'root', name: 'My Drive' }])
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [creating, setCreating] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [createBusy, setCreateBusy] = useState(false)
+  const [createError, setCreateError] = useState(null)
 
   const loadFolders = useCallback(async (folderId) => {
     setLoading(true)
@@ -40,12 +46,33 @@ export default function GoogleDriveFolderPicker({
   function openFolder(folder) {
     setTrail((prev) => [...prev, { id: folder.id, name: folder.name }])
     loadFolders(folder.id)
+    setCreating(false)
+    setNewName('')
+    setCreateError(null)
   }
 
   function jumpTo(index) {
     const next = trail.slice(0, index + 1)
     setTrail(next)
     loadFolders(next[next.length - 1].id)
+    setCreating(false)
+    setNewName('')
+    setCreateError(null)
+  }
+
+  async function handleCreateFolder() {
+    const name = newName.trim()
+    if (!name || createBusy) return
+    setCreateBusy(true)
+    setCreateError(null)
+    try {
+      const result = await createDriveFolder(currentFolder.id, name)
+      onSelect({ id: result.folder.id, name: result.folder.name })
+    } catch (err) {
+      setCreateError(err.message)
+    } finally {
+      setCreateBusy(false)
+    }
   }
 
   return (
@@ -83,12 +110,85 @@ export default function GoogleDriveFolderPicker({
               type="button"
               className="btn btn-ghost fs-xs"
               onClick={() => jumpTo(index)}
-              style={{ padding: '4px 8px' }}
+              style={{ padding: '8px 10px' }}
             >
               {crumb.name}
             </button>
           ))}
         </div>
+
+        {allowCreate && !creating && (
+          <button
+            type="button"
+            className="btn btn-ghost fs-xs"
+            onClick={() => setCreating(true)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              width: '100%',
+              minHeight: 44,
+              justifyContent: 'center',
+              marginBottom: 'var(--sp-3)',
+              color: 'var(--accent)',
+              borderColor: 'color-mix(in oklab, var(--accent) 35%, var(--line))',
+            }}
+          >
+            ＋ Create folder
+          </button>
+        )}
+
+        {allowCreate && creating && (
+          <div style={{ marginBottom: 'var(--sp-3)' }}>
+            <input
+              type="text"
+              autoFocus
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleCreateFolder()
+                if (e.key === 'Escape') setCreating(false)
+              }}
+              placeholder="Folder name"
+              style={{
+                width: '100%',
+                minHeight: 44,
+                padding: '0 12px',
+                borderRadius: 8,
+                background: 'var(--bg-3)',
+                border: '1px solid var(--line)',
+                color: 'var(--fg)',
+                fontSize: 'var(--fs-sm)',
+                outline: 'none',
+              }}
+            />
+            {createError && (
+              <div className="fs-xs" style={{ color: 'var(--reject)', marginTop: 'var(--sp-2)' }}>
+                {createError}
+              </div>
+            )}
+            <div className="flex" style={{ gap: 'var(--sp-2)', marginTop: 'var(--sp-2)' }}>
+              <button
+                type="button"
+                className="btn btn-ghost btn-uppercase"
+                onClick={() => setCreating(false)}
+                disabled={createBusy}
+                style={{ flex: 1, minHeight: 44 }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary btn-uppercase"
+                onClick={handleCreateFolder}
+                disabled={createBusy || !newName.trim()}
+                style={{ flex: 1, minHeight: 44 }}
+              >
+                {createBusy ? 'Creating…' : 'Create'}
+              </button>
+            </div>
+          </div>
+        )}
 
         {error && (
           <div className="fs-xs" style={{ color: 'var(--reject)', marginBottom: 'var(--sp-3)' }}>

@@ -5,6 +5,7 @@ export default function AppBar({ view, step, totalSteps, onHelp, projectName }) 
     landing: 'Landing',
     culling: 'Culling',
     compare: 'Compare',
+    edit: 'AI Edit',
     export: 'Review & Export',
   };
   return (

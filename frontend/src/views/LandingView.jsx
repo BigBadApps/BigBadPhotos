@@ -101,9 +101,6 @@ export default function LandingView({
   const [heroPhotoId, setHeroPhotoId] = useState(null);
   const [pickerHint, setPickerHint] = useState(null);
   const [folderMode, setFolderMode] = useState('local');
-  const keepCount = useStore(s => s.getKeepCount());
-  const maybeCount = useStore(s => s.getMaybeCount());
-  const rejectCount = useStore(s => s.getRejectCount());
   const previewableCount = useStore((s) => {
     let count = 0;
     for (const id of s.order) {
@@ -211,18 +208,6 @@ export default function LandingView({
             )}
           </div>
 
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 'var(--sp-3)',
-            padding: 'var(--sp-3) var(--sp-5)',
-            borderTop: '1px solid var(--line)',
-            background: 'var(--bg-2)',
-            flexShrink: 0,
-          }}>
-            <span className="meta" style={{ color: 'var(--fg-3)', marginRight: 4 }}>Session</span>
-            <span className="dbadge keep"><span className="glyph" />Keep &middot; {keepCount}</span>
-            <span className="dbadge maybe"><span className="glyph" />Maybe &middot; {maybeCount}</span>
-            <span className="dbadge reject"><span className="glyph" />Reject &middot; {rejectCount}</span>
-          </div>
 
           <div style={{
             position: 'absolute', top: 'var(--sp-5)', left: 'var(--sp-5)',

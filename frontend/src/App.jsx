@@ -7,7 +7,11 @@ import HelpOverlay from './components/HelpOverlay';
 import LandingView from './views/LandingView';
 import CullingView from './views/CullingView';
 import CompareView from './views/CompareView';
+import EditView from './views/EditView';
 import ReviewExportView from './views/ReviewExportView';
+import SessionsView from './views/SessionsView';
+import RunView from './views/RunView';
+import ReviewQueueView from './views/ReviewQueueView';
 import { usePhotoLoader } from './hooks/usePhotoLoader';
 import { usePhotoRanker } from './hooks/usePhotoRanker';
 import { useSessionPersistence } from './hooks/useSessionPersistence';
@@ -21,7 +25,6 @@ import {
   resumeDriveRedirectIfNeeded,
 } from './utils/googleDrive';
 import { useAutonomousMode } from './hooks/useAutonomousMode';
-import AutonomousPanel       from './components/AutonomousPanel';
 
 const HAS_DIR_PICKER = typeof window !== 'undefined' && 'showDirectoryPicker' in window;
 
@@ -90,9 +93,10 @@ function AppContent() {
   const currentView = location.pathname === '/'        ? 'landing'
     : location.pathname === '/cull'    ? 'culling'
     : location.pathname === '/compare' ? 'compare'
+    : location.pathname === '/edit'    ? 'edit'
     : 'export';
 
-  const stepMap = { landing: 2, culling: 3, compare: 4, export: 5 };
+  const stepMap = { landing: 2, culling: 3, compare: 4, edit: 5, export: 6 };
 
   useEffect(() => {
     let toastTimer;
@@ -133,6 +137,12 @@ function AppContent() {
         return;
       }
       if (k === '4' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        if (!hasPhotos) { setToast({ message: 'Select a source folder first', at: Date.now() }); return; }
+        navigate('/edit');
+        return;
+      }
+      if (k === '5' && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         if (!hasPhotos) { setToast({ message: 'Select a source folder first', at: Date.now() }); return; }
         navigate('/review');
@@ -237,30 +247,34 @@ function AppContent() {
   }, [setDestDir]);
 
   const pickSource = useCallback(async () => {
-    if (!HAS_DIR_PICKER) {
-      fileInputRef.current?.click();
-      return;
+    if (HAS_DIR_PICKER) {
+      try {
+        const dir = await window.showDirectoryPicker({ mode: 'read' });
+        clearPhotos();
+        setSourceDir(dir);
+        return;
+      } catch (err) {
+        if (err.name === 'AbortError') return; // user cancelled — no fallback
+        // Native picker present but blocked (e.g. Brave Shields) — fall back below.
+        console.warn('Source directory picker unavailable, using file input:', err);
+      }
     }
-    try {
-      const dir = await window.showDirectoryPicker({ mode: 'read' });
-      clearPhotos();
-      setSourceDir(dir);
-    } catch (err) {
-      if (err.name !== 'AbortError') console.error('Source picker:', err);
-    }
+    fileInputRef.current?.click();
   }, [setSourceDir, clearPhotos]);
 
   const pickExport = useCallback(async () => {
-    if (!HAS_DIR_PICKER) {
-      exportInputRef.current?.click();
-      return;
+    if (HAS_DIR_PICKER) {
+      try {
+        const dir = await window.showDirectoryPicker({ mode: 'readwrite' });
+        setDestDir(dir);
+        return;
+      } catch (err) {
+        if (err.name === 'AbortError') return; // user cancelled — no fallback
+        // Native picker present but blocked (e.g. Brave Shields) — fall back below.
+        console.warn('Export directory picker unavailable, using file input:', err);
+      }
     }
-    try {
-      const dir = await window.showDirectoryPicker({ mode: 'readwrite' });
-      setDestDir(dir);
-    } catch (err) {
-      if (err.name !== 'AbortError') console.error('Export picker:', err);
-    }
+    exportInputRef.current?.click();
   }, [setDestDir]);
 
   // Derive file type label from loaded photos
@@ -382,7 +396,7 @@ function AppContent() {
       <AppBar
         view={currentView}
         step={stepMap[currentView]}
-        totalSteps={5}
+        totalSteps={6}
         onHelp={() => setHelp(true)}
         projectName={sourceDir?.name || null}
       />
@@ -436,7 +450,7 @@ function AppContent() {
             <LandingView
               state={landingState}
               onSelectSource={pickSource}
-              onSelectExport={HAS_DIR_PICKER ? pickExport : undefined}
+              onSelectExport={pickExport}
               onSelectDriveSource={driveAvailable ? () => openDrivePicker('source') : undefined}
               onSelectDriveExport={driveAvailable ? () => openDrivePicker('export') : undefined}
               onBeginScoring={beginScoring}
@@ -449,7 +463,11 @@ function AppContent() {
           } />
           <Route path="/cull"    element={hasPhotos ? <CullingView feedbackIntensity="pronounced" showInlineKbd onComplete={() => navigate('/review')} /> : <Navigate to="/" />} />
           <Route path="/compare" element={hasPhotos ? <CompareView /> : <Navigate to="/" />} />
+          <Route path="/edit"    element={hasPhotos ? <EditView /> : <Navigate to="/" />} />
           <Route path="/review"  element={hasPhotos ? <ReviewExportView /> : <Navigate to="/" />} />
+          <Route path="/sessions" element={<SessionsView />} />
+          <Route path="/sessions/:sessionId" element={<RunView />} />
+          <Route path="/review-queue" element={<ReviewQueueView />} />
         </Routes>
         {driveConnecting && (
           <div
@@ -495,6 +513,7 @@ function AppContent() {
           ['/', 'Landing', false],
           ['/cull', 'Culling', true],
           ['/compare', 'Compare', true],
+          ['/edit', 'Edit', true],
           ['/review', 'Export', true],
         ].map(([path, label, needsPhotos]) => {
           const disabled = needsPhotos && !hasPhotos;
@@ -525,7 +544,6 @@ export default function App() {
   useEffect(() => {
     const r = document.documentElement;
     r.setAttribute('data-theme', 'surgical');
-    r.setAttribute('data-mode', 'light');
     r.setAttribute('data-density', 'comfortable');
   }, []);
 

@@ -28,16 +28,20 @@ This project is managed by BigBadAgentForce.
 
 ## Structure
 
-- `app.py` — Flask entry point, serves API + React static build + WebSocket bridge
-- `backend/` — Python modules (ranking, image processing, ftp_ingest, burst_watcher)
+- `app.py` — Flask entry point, serves API + React static build + the sessions REST API (`/sessions`, `/runs`, `/photos`, `/settings`)
+- `backend/` — Python modules: `db.py` (SQLite), `sessions.py` (session configs + settings), `pipeline.py` (DB-backed per-photo state machine), `preflight.py` (run pre-checks), `auto_edit.py` (Topaz edits), `scoring.py` (OpenCV ranking), `google_drive.py` (Drive folder helpers), `google_auth.py` (server Google OAuth), `topaz.py`
 - `frontend/` — React/Vite SPA
   - `src/App.jsx` — shell: routing, photo loader, ranker, hidden file inputs (iOS), bottom nav
   - `src/components/GoogleGate.jsx` — auth gate (`/auth/config`, `/auth/me`, password / dev / open)
+  - `src/api/sessionsClient.js` — client for `/sessions`, `/runs`, `/photos`, `/settings`
   - `src/hooks/usePhotoRanker.js` — manual `beginScoring` to `/rank`, progress + ETA in store, 401 → session-expired UX
   - `src/hooks/useExporter.js` — export (FSAPI + iOS share/downloads), `exportDone` only on success
   - `src/hooks/useAutonomousMode.js` — autonomous mode pipeline, writes `.bbp.json` sidecars, polls for new images. Drive requires write scope. Safari uses `showDirectoryPicker` instead of `requestPermission`.
   - `src/components/AutonomousPanel.jsx` — toggle and status for autonomous mode
   - `src/views/LandingView.jsx` — source folder, hero preview, explicit scoring CTA, review gate after scoring, autonomous toggle
+  - `src/views/SessionsView.jsx` — session list + create/edit form
+  - `src/views/RunView.jsx` — live run dashboard (preflight, start/stop, photo review)
+  - `src/views/ReviewQueueView.jsx` — Drive-backed review queue (keep / reject / approve-all)
   - `src/views/CullingView.jsx` — AI filters, bulk Keep/Maybe/Reject, metric sidebar (`*_score` from `/rank`)
   - `src/views/ReviewExportView.jsx` — Review + export UI
   - `frontend/tests/e2e.spec.js` — Playwright smoke
@@ -49,10 +53,11 @@ This project is managed by BigBadAgentForce.
 - `POST /analyze` — image ranking
 - `POST /rank` — ranking endpoint (requires authenticated session for API routes)
 - `GET /auth/config`, `GET /auth/me`, `POST /auth/password`, `POST /auth/google`, `POST /auth/logout`
-- `WS /bridge` — Camera Bridge WebSocket (frame_arrived, burst_ready)
-- `GET /bridge/status` — Current bridge state
-- `GET /bridge/bursts/<burst_id>` — Burst status
-- `POST /bridge/bursts/<burst_id>/hero` — Select burst hero
+- `GET/POST /sessions`, `GET/PUT/DELETE /sessions/<id>` — session config CRUD
+- `POST /sessions/<id>/preflight`, `POST /sessions/<id>/start` — run pre-checks / start a run
+- `GET /runs/active`, `POST /runs/active/stop`, `GET /runs/<id>/photos`, `POST /runs/<id>/approve-all` — live run control + review
+- `POST /photos/<id>/decision`, `GET /photos/<id>/thumb` — per-photo review + thumbnail proxy
+- `GET/PUT /settings` — inbox / sessions-root wiring
 
 ## Environment Variables
 

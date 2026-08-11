@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useStore } from '../store'
 import { useExporter } from '../hooks/useExporter'
 import Icon from '../components/Icon'
+import GooglePhotosAlbumPicker from '../components/GooglePhotosAlbumPicker'
 
 const HAS_DIR_PICKER = typeof window !== 'undefined' && 'showDirectoryPicker' in window
 
@@ -73,6 +74,8 @@ export default function ReviewExportView() {
   const [includeMaybes, setIncludeMaybes] = useState(false)
   const [fileFormat, setFileFormat] = useState('original')
   const [newFolderName, setNewFolderName] = useState('')
+  const [destination, setDestination] = useState('folder')
+  const photosAlbum = useStore(state => state.photosAlbum)
 
   const {
     exporting, exportedCount, exportTotal,
@@ -106,7 +109,7 @@ export default function ReviewExportView() {
     }
   }
 
-  const handleExport = () => startExport({ fileFormat, includeMaybes, newFolderName })
+  const handleExport = () => startExport({ fileFormat, includeMaybes, newFolderName, destination })
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
@@ -271,45 +274,68 @@ export default function ReviewExportView() {
         </div>
 
         {/* Destination */}
-        {HAS_DIR_PICKER ? (
-          <div style={{ padding: 'var(--sp-5)', borderBottom: '1px solid var(--line)' }}>
-            <div className="meta" style={{ marginBottom: 12 }}>Output Destination</div>
-            {destDir ? (
-              <button onClick={handlePickDest} style={{
-                width: '100%', display: 'flex', alignItems: 'center', gap: 10,
-                padding: '10px 12px', borderRadius: 8, textAlign: 'left',
-                background: 'color-mix(in oklab, var(--keep) 10%, transparent)',
-                border: '1px solid color-mix(in oklab, var(--keep) 30%, transparent)',
-              }}>
-                <Icon name="folderOpen" size={18} style={{ color: 'var(--keep)', flexShrink: 0 }} />
-                <span className="fs-sm" style={{ color: 'var(--keep)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{destDir.name}</span>
-                <Icon name="arrowR" size={14} style={{ color: 'var(--keep)', opacity: .5, flexShrink: 0 }} />
+        <div style={{ padding: 'var(--sp-5)', borderBottom: '1px solid var(--line)' }}>
+          <div className="meta" style={{ marginBottom: 12 }}>Output Destination</div>
+
+          {/* Segmented control */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 'var(--sp-3)' }}>
+            {[['folder', 'Folder / Drive'], ['photos', 'Google Photos']].map(([key, label]) => (
+              <button
+                key={key}
+                className="btn fs-xs"
+                onClick={() => setDestination(key)}
+                style={{
+                  flex: 1,
+                  background: destination === key ? 'color-mix(in oklab, var(--accent) 20%, var(--bg-3))' : 'var(--bg-3)',
+                  color: destination === key ? 'var(--accent)' : 'var(--fg-2)',
+                  border: destination === key
+                    ? '1px solid color-mix(in oklab, var(--accent) 50%, var(--line))'
+                    : '1px solid var(--line)',
+                }}
+              >
+                {label}
               </button>
+            ))}
+          </div>
+
+          {destination === 'photos'
+            ? <GooglePhotosAlbumPicker />
+            : HAS_DIR_PICKER ? (
+              <>
+                {destDir ? (
+                  <button onClick={handlePickDest} style={{
+                    width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '10px 12px', borderRadius: 8, textAlign: 'left',
+                    background: 'color-mix(in oklab, var(--keep) 10%, transparent)',
+                    border: '1px solid color-mix(in oklab, var(--keep) 30%, transparent)',
+                  }}>
+                    <Icon name="folderOpen" size={18} style={{ color: 'var(--keep)', flexShrink: 0 }} />
+                    <span className="fs-sm" style={{ color: 'var(--keep)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{destDir.name}</span>
+                    <Icon name="arrowR" size={14} style={{ color: 'var(--keep)', opacity: .5, flexShrink: 0 }} />
+                  </button>
+                ) : (
+                  <button onClick={handlePickDest} style={{
+                    width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '10px 12px', borderRadius: 8, textAlign: 'left',
+                    background: 'var(--bg-3)', border: '1px solid var(--line)',
+                    color: 'var(--fg-2)',
+                  }}>
+                    <Icon name="folder" size={18} style={{ color: 'var(--fg-3)', flexShrink: 0 }} />
+                    <span className="fs-sm">Select destination folder</span>
+                  </button>
+                )}
+              </>
             ) : (
-              <button onClick={handlePickDest} style={{
-                width: '100%', display: 'flex', alignItems: 'center', gap: 10,
-                padding: '10px 12px', borderRadius: 8, textAlign: 'left',
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '10px 12px', borderRadius: 8,
                 background: 'var(--bg-3)', border: '1px solid var(--line)',
-                color: 'var(--fg-2)',
               }}>
-                <Icon name="folder" size={18} style={{ color: 'var(--fg-3)', flexShrink: 0 }} />
-                <span className="fs-sm">Select destination folder</span>
-              </button>
+                <Icon name="arrowR" size={18} style={{ color: 'var(--accent)', opacity: .6, flexShrink: 0 }} />
+                <span className="fs-xs" style={{ color: 'var(--fg-2)' }}>Files shared via iOS Share Sheet</span>
+              </div>
             )}
-          </div>
-        ) : (
-          <div style={{ padding: 'var(--sp-5)', borderBottom: '1px solid var(--line)' }}>
-            <div className="meta" style={{ marginBottom: 12 }}>Output Destination</div>
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 10,
-              padding: '10px 12px', borderRadius: 8,
-              background: 'var(--bg-3)', border: '1px solid var(--line)',
-            }}>
-              <Icon name="arrowR" size={18} style={{ color: 'var(--accent)', opacity: .6, flexShrink: 0 }} />
-              <span className="fs-xs" style={{ color: 'var(--fg-2)' }}>Files shared via iOS Share Sheet</span>
-            </div>
-          </div>
-        )}
+        </div>
 
         {/* Subfolder */}
         {HAS_DIR_PICKER && (
@@ -398,7 +424,7 @@ export default function ReviewExportView() {
             exportDone={exportDone}
             exportedCount={exportedCount}
             exportTotal={exportTotal}
-            hasDestDir={hasDestDir}
+            hasDestDir={destination === 'photos' ? !!photosAlbum : hasDestDir}
           />
           {!hasDestDir && !exporting && !exportDone && (
             <p className="fs-xxs dim mono upper ta-c" style={{ marginTop: 8 }}>Select a destination first</p>
