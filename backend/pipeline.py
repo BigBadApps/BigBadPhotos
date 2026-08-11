@@ -423,28 +423,24 @@ class Pipeline:
             if self._auth_error:
                 return
             try:
-                export_id = self._find_or_upload(
-                    token, self.session['exportFolderId'], row['filename'],
-                    lambda: self._export_path(row))
-                self._set_photo_state(
-                    row['id'], state='exported', exported_file_id=export_id)
+                # uploaded_to_export is a per-row flag, not a Drive-side name
+                # lookup: filenames repeat across a run (camera numbering
+                # resets across cards/folders), so "does Drive already have a
+                # file with this name" can match a *different* photo and
+                # wrongly skip this row's own upload. Retrying only re-uploads
+                # when *this row* hasn't already recorded success.
+                if not row['uploaded_to_export']:
+                    path = self._export_path(row)
+                    with open(path, 'rb') as fh:
+                        data = fh.read()
+                    created = self._drive.upload_file(
+                        token, self.session['exportFolderId'], row['filename'], data)
+                    self._set_photo_state(
+                        row['id'], uploaded_to_export=1,
+                        exported_file_id=created.get('id'))
+                self._set_photo_state(row['id'], state='exported')
             except Exception as exc:
                 self._handle_step_exception(row, exc, 'export_failed')
-
-    def _find_or_upload(self, token: str, parent_id: str, filename: str,
-                        path_fn, mime_type: str | None = None) -> str:
-        """Upload `filename` into `parent_id`, but first check whether a file
-        by that name already landed there — makes retries after a transient
-        failure (Drive created the file, but the response was lost) idempotent
-        instead of creating a duplicate on every retry."""
-        existing = self._drive.find_child_by_name(token, parent_id, filename)
-        if existing:
-            return existing['id']
-        path = path_fn()
-        with open(path, 'rb') as fh:
-            data = fh.read()
-        created = self._drive.upload_file(token, parent_id, filename, data, mime_type)
-        return created.get('id')
 
     # -- step 7: archive ---------------------------------------------------------
 
@@ -467,23 +463,26 @@ class Pipeline:
             if self._auth_error:
                 return
             try:
-                # Both the move and the sidecar upload are checked before
-                # acting, so a retry after a transient failure between them
-                # (move succeeds, sidecar upload times out) resumes cleanly
-                # instead of re-moving an already-archived file or uploading
-                # a second sidecar.
-                if not self._drive.find_child_by_name(
-                        token, archive_id, row['filename']):
+                # moved_to_archive/sidecar_uploaded are per-row flags, not
+                # Drive-side name lookups — see _export's comment on why a
+                # filename-keyed "does it already exist" check is unsound
+                # here (two different photos can share a filename, and a
+                # name-based check would treat the *other* photo's file as
+                # proof this row is already done, silently skipping its own
+                # move/upload). A retry only redoes what *this row* hasn't
+                # already recorded as done.
+                if not row['moved_to_archive']:
                     self._drive.move_file(
                         token, row['drive_file_id'], archive_id,
                         self.session['sourceFolderId'])
-                sidecar_name = f"{row['filename']}{SIDECAR_SUFFIX}"
-                if not self._drive.find_child_by_name(
-                        token, archive_id, sidecar_name):
+                    self._set_photo_state(row['id'], moved_to_archive=1)
+                if not row['sidecar_uploaded']:
+                    sidecar_name = f"{row['filename']}{SIDECAR_SUFFIX}"
                     sidecar = self._build_sidecar(row)
                     self._drive.upload_file(
                         token, archive_id, sidecar_name,
                         json.dumps(sidecar).encode('utf-8'), 'application/json')
+                    self._set_photo_state(row['id'], sidecar_uploaded=1)
                 self._set_photo_state(row['id'], state='archived')
             except Exception as exc:
                 self._handle_step_exception(row, exc, 'archive_failed')

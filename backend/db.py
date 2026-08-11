@@ -10,7 +10,7 @@ import os
 import sqlite3
 import threading
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 DEFAULT_PATH = os.path.join(os.path.expanduser('~'), '.bigbadphotos', 'bbp.db')
 
@@ -85,6 +85,18 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 """
 
+# v2: per-row completion flags for the two Drive-side archive sub-steps.
+# Filenames are not unique across a run (camera numbering can repeat across
+# cards/folders), so "does Drive already have a file with this name" is not
+# a safe idempotency check — it can match a *different* photo's file and
+# cause this row's own move/upload to be silently skipped. These flags are
+# scoped to the row itself, immune to filename collisions.
+SCHEMA_V2 = """
+ALTER TABLE photos ADD COLUMN moved_to_archive INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE photos ADD COLUMN sidecar_uploaded INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE photos ADD COLUMN uploaded_to_export INTEGER NOT NULL DEFAULT 0;
+"""
+
 
 def connect(path: str | None = None) -> sqlite3.Connection:
     path = path or _configured_path or DEFAULT_PATH
@@ -101,8 +113,14 @@ def migrate(conn: sqlite3.Connection) -> int:
     current = conn.execute('PRAGMA user_version').fetchone()[0]
     if current < 1:
         conn.executescript(SCHEMA_V1)
-        conn.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
+        conn.execute('PRAGMA user_version=1')
         conn.commit()
+        current = 1
+    if current < 2:
+        conn.executescript(SCHEMA_V2)
+        conn.execute('PRAGMA user_version=2')
+        conn.commit()
+        current = 2
     return conn.execute('PRAGMA user_version').fetchone()[0]
 
 

@@ -625,10 +625,14 @@ def test_stop_run_returns_false_when_nothing_running(monkeypatch):
 # -- review fixes: idempotent Drive retries, decisions blocked on inactive runs --
 
 class FlakyExportDrive(FakeDrive):
-    """The first upload_file call raises a transient (500) error, but only
-    after Drive has already "created" the file — simulating a lost response,
-    not a lost request. A second call would prove the idempotency check
-    failed (it should discover the file via find_child_by_name instead)."""
+    """upload_file raises a transient (500) error exactly once, then
+    succeeds normally — a clean failure with no ambiguity about whether
+    Drive actually received the file (unlike a lost-response scenario,
+    which this design intentionally no longer tries to detect — see the
+    module-level note on uploaded_to_export/moved_to_archive/
+    sidecar_uploaded for why: a Drive-side "does this name already exist"
+    check is unsound when two different photos can share a filename, so
+    retries after a genuine failure simply re-upload)."""
 
     def __init__(self, files):
         super().__init__(files)
@@ -636,39 +640,101 @@ class FlakyExportDrive(FakeDrive):
 
     def upload_file(self, token, parent_id, filename, data, mime_type=None):
         if filename.endswith('.bbp.json'):
-            # The archive step's sidecar upload is a separate, unrelated
-            # call — only the original export upload is flaky here.
             return super().upload_file(token, parent_id, filename, data, mime_type)
         self.upload_attempts += 1
         if self.upload_attempts == 1:
-            self._parents[filename] = parent_id
             raise DriveHTTPError(500)
-        raise AssertionError(
-            'upload_file must not be called again once the file already '
-            'exists at the destination — find_child_by_name should have '
-            'found it on retry')
+        return super().upload_file(token, parent_id, filename, data, mime_type)
 
 
-def test_export_retry_after_lost_response_does_not_duplicate():
+def test_export_retry_after_transient_failure_eventually_succeeds():
     drive = FlakyExportDrive({'keep_1.jpg': _jpeg_bytes(1)})
     s = _session(autonomous=True)
     run_id = _run(s['id'])
     pipe = _pipe(s, run_id, drive)
-    pipe.poll_once()  # upload "succeeds" server-side but raises 500 client-side
+    pipe.poll_once()  # upload raises 500 -> transient, attempts bumped
     row = _rows(run_id)[0]
     assert row['state'] == 'exporting'
     assert row['attempts'] == 1
-    pipe.poll_once()  # retry: found via find_child_by_name, no second upload
+    assert row['uploaded_to_export'] == 0
+    pipe.poll_once()  # retry: genuinely re-uploads and succeeds this time
     row = _rows(run_id)[0]
     assert row['state'] == 'archived'
+    assert row['uploaded_to_export'] == 1
     assert row['exported_file_id'] == 'id-keep_1.jpg'
-    assert drive.upload_attempts == 1
+    assert drive.upload_attempts == 2
+
+
+def test_export_does_not_reupload_once_flag_recorded():
+    # Defensive/regression check on the skip branch itself: if a row is
+    # somehow re-selected while still 'exporting' but already has
+    # uploaded_to_export=1 (e.g. the state write after a successful upload
+    # failed to commit for an unrelated reason), _export must not upload a
+    # second time.
+    class UploadShouldNotBeCalled(FakeDrive):
+        def upload_file(self, token, parent_id, filename, data, mime_type=None):
+            raise AssertionError('upload_file must not be called: already recorded done')
+
+    drive = UploadShouldNotBeCalled({'keep_1.jpg': _jpeg_bytes(1)})
+    s = _session(autonomous=True)
+    run_id = _run(s['id'])
+    conn = db.get()
+    now = '2026-01-01T00:00:00+00:00'
+    conn.execute(
+        "INSERT INTO photos (run_id, drive_file_id, filename, state,"
+        " overall_score, uploaded_to_export, exported_file_id, claimed_at, updated_at)"
+        " VALUES (?, 'id-keep_1.jpg', 'keep_1.jpg', 'exporting', 0.9, 1, 'id-keep_1.jpg', ?, ?)",
+        (run_id, now, now))
+    conn.commit()
+
+    pipe = _pipe(s, run_id, drive)
+    pipe._export('TOK')
+
+    row = _rows(run_id)[0]
+    assert row['state'] == 'exported'
+
+
+def test_archive_handles_filename_collision_across_distinct_photos():
+    # Two DIFFERENT photos (distinct drive_file_id) can legitimately share a
+    # filename — Canon numbering resets across cards/folders. A name-based
+    # "does Drive already have this file" check would treat the first
+    # photo's archived file as proof the second is already done and
+    # silently skip its move/sidecar. Each row's own work must happen
+    # independently, keyed by the row itself, not by filename.
+    drive = FakeDrive({})
+    s = _session(autonomous=True)
+    run_id = _run(s['id'])
+    conn = db.get()
+    now = '2026-01-01T00:00:00+00:00'
+    for file_id in ('id-photoA', 'id-photoB'):
+        conn.execute(
+            "INSERT INTO photos (run_id, drive_file_id, filename, state,"
+            " overall_score, claimed_at, updated_at)"
+            " VALUES (?, ?, 'keep_1.jpg', 'rejected', 0.1, ?, ?)",
+            (run_id, file_id, now, now))
+    conn.commit()
+
+    pipe = _pipe(s, run_id, drive)
+    pipe._archive('TOK')
+
+    rows = _rows(run_id)
+    assert len(rows) == 2
+    for row in rows:
+        assert row['state'] == 'archived'
+        assert row['moved_to_archive'] == 1
+        assert row['sidecar_uploaded'] == 1
+    assert sorted(m[0] for m in drive.moves) == ['id-photoA', 'id-photoB']
+    sidecar_uploads = [u for u in drive.uploads if u[1].endswith('.bbp.json')]
+    assert len(sidecar_uploads) == 2
 
 
 class FlakyArchiveDrive(FakeDrive):
     """move_file always succeeds; the sidecar upload fails transiently once.
     A correct retry must not re-move the (already-moved) original and must
-    not leave the row stuck without ever completing the sidecar."""
+    not leave the row stuck without ever completing the sidecar. moved_to_
+    archive is recorded (and thus checked on retry) as its own DB write
+    immediately after the move succeeds, independent of whether the sidecar
+    upload that follows in the same attempt then fails."""
 
     def __init__(self, files):
         super().__init__(files)
