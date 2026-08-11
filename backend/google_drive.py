@@ -176,11 +176,14 @@ def upload_file(
     filename: str,
     data: bytes,
     mime_type: str | None = None,
+    app_properties: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     import json
 
     mime = mime_type or mimetypes.guess_type(filename)[0] or 'application/octet-stream'
     metadata = {'name': filename, 'parents': [parent_id]}
+    if app_properties:
+        metadata['appProperties'] = app_properties
     boundary = 'bbp_drive_upload_boundary'
     meta_json = json.dumps(metadata).encode('utf-8')
     body = b''.join([
@@ -281,6 +284,45 @@ def find_child_by_name(
     )
     if folders_only:
         q += f" and mimeType = '{FOLDER_MIME}'"
+    resp = requests.get(
+        f'{DRIVE_API}/files',
+        headers=_headers(access_token),
+        params={
+            'q': q,
+            'fields': 'files(id,name,mimeType)',
+            'pageSize': 1,
+            'supportsAllDrives': 'true',
+            'includeItemsFromAllDrives': 'true',
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    files = resp.json().get('files', [])
+    return files[0] if files else None
+
+
+def find_by_app_property(
+    access_token: str,
+    parent_id: str,
+    key: str,
+    value: str,
+) -> dict[str, Any] | None:
+    """Find a child of `parent_id` tagged with a given appProperties key/value.
+
+    Unlike find_child_by_name, this is safe as a per-item idempotency check
+    even when multiple items share a filename: appProperties are set once at
+    upload time (see upload_file's app_properties param) with a value that's
+    unique to the caller's own record (e.g. a database row id), not derived
+    from the filename. A retry after a lost response can look up "did *my*
+    upload for *this specific row* already land" without any risk of a
+    same-named-but-different item satisfying the check.
+    """
+    escaped_key = key.replace("'", "\\'")
+    escaped_value = value.replace("'", "\\'")
+    q = (
+        f"'{parent_id}' in parents and trashed = false "
+        f"and appProperties has {{ key='{escaped_key}' and value='{escaped_value}' }}"
+    )
     resp = requests.get(
         f'{DRIVE_API}/files',
         headers=_headers(access_token),

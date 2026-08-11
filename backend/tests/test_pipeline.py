@@ -68,8 +68,8 @@ class FakeDrive:
         name = file_id[len('id-'):]
         return self.files[name], name, 'image/jpeg'
 
-    def upload_file(self, token, parent_id, filename, data, mime_type=None):
-        self.uploads.append((parent_id, filename, data))
+    def upload_file(self, token, parent_id, filename, data, mime_type=None, app_properties=None):
+        self.uploads.append((parent_id, filename, data, app_properties))
         self._parents[filename] = parent_id
         return {'id': f'id-{filename}'}
 
@@ -89,6 +89,12 @@ class FakeDrive:
             return {'id': f'id-{name}', 'name': name}
         return None
 
+    def find_by_app_property(self, token, parent_id, key, value):
+        for up_parent, up_name, _data, up_props in self.uploads:
+            if up_parent == parent_id and up_props and up_props.get(key) == value:
+                return {'id': f'id-{up_name}', 'name': up_name}
+        return None
+
 
 class UploadFailing(FakeDrive):
     """FakeDrive whose upload_file always raises an HTTP-style error."""
@@ -97,7 +103,7 @@ class UploadFailing(FakeDrive):
         super().__init__(files)
         self.status_code = status_code
 
-    def upload_file(self, token, parent_id, filename, data, mime_type=None):
+    def upload_file(self, token, parent_id, filename, data, mime_type=None, app_properties=None):
         raise DriveHTTPError(self.status_code)
 
 
@@ -392,7 +398,7 @@ def test_upload_401_message_only_runtime_error_still_stops():
     # google_drive.upload_file surfaces a 401 as a message-only RuntimeError
     # (no .response and no '(401)' in the text) — the auth phrases must catch it.
     class UploadAuthMessage(FakeDrive):
-        def upload_file(self, token, parent_id, filename, data, mime_type=None):
+        def upload_file(self, token, parent_id, filename, data, mime_type=None, app_properties=None):
             raise RuntimeError('Request is missing required authentication credential.'
                                ' Expected OAuth 2 access token, login cookie or other'
                                ' authentication credentials.')
@@ -625,26 +631,21 @@ def test_stop_run_returns_false_when_nothing_running(monkeypatch):
 # -- review fixes: idempotent Drive retries, decisions blocked on inactive runs --
 
 class FlakyExportDrive(FakeDrive):
-    """upload_file raises a transient (500) error exactly once, then
-    succeeds normally — a clean failure with no ambiguity about whether
-    Drive actually received the file (unlike a lost-response scenario,
-    which this design intentionally no longer tries to detect — see the
-    module-level note on uploaded_to_export/moved_to_archive/
-    sidecar_uploaded for why: a Drive-side "does this name already exist"
-    check is unsound when two different photos can share a filename, so
-    retries after a genuine failure simply re-upload)."""
+    """upload_file raises a transient (500) error exactly once — a clean
+    failure where Drive never actually received the file (find_by_app_
+    property correctly finds nothing) — then succeeds normally on retry."""
 
     def __init__(self, files):
         super().__init__(files)
         self.upload_attempts = 0
 
-    def upload_file(self, token, parent_id, filename, data, mime_type=None):
+    def upload_file(self, token, parent_id, filename, data, mime_type=None, app_properties=None):
         if filename.endswith('.bbp.json'):
-            return super().upload_file(token, parent_id, filename, data, mime_type)
+            return super().upload_file(token, parent_id, filename, data, mime_type, app_properties)
         self.upload_attempts += 1
         if self.upload_attempts == 1:
             raise DriveHTTPError(500)
-        return super().upload_file(token, parent_id, filename, data, mime_type)
+        return super().upload_file(token, parent_id, filename, data, mime_type, app_properties)
 
 
 def test_export_retry_after_transient_failure_eventually_succeeds():
@@ -665,6 +666,44 @@ def test_export_retry_after_transient_failure_eventually_succeeds():
     assert drive.upload_attempts == 2
 
 
+class ExportSucceedsButResponseLost(FakeDrive):
+    """The real scenario find_by_app_property exists for: Drive actually
+    creates the file (so it's genuinely discoverable afterward), but the
+    client sees an error instead of the success response — e.g. a timeout
+    landing right as Drive finishes. A correct retry must discover the
+    already-created file via its bbp_photo_id tag and not upload again."""
+
+    def __init__(self, files):
+        super().__init__(files)
+        self.real_upload_calls = 0
+
+    def upload_file(self, token, parent_id, filename, data, mime_type=None, app_properties=None):
+        if filename.endswith('.bbp.json'):
+            return super().upload_file(token, parent_id, filename, data, mime_type, app_properties)
+        self.real_upload_calls += 1
+        result = super().upload_file(token, parent_id, filename, data, mime_type, app_properties)
+        if self.real_upload_calls == 1:
+            raise DriveHTTPError(500)  # Drive succeeded; the response didn't
+        return result
+
+
+def test_export_retry_after_lost_response_does_not_duplicate():
+    drive = ExportSucceedsButResponseLost({'keep_1.jpg': _jpeg_bytes(1)})
+    s = _session(autonomous=True)
+    run_id = _run(s['id'])
+    pipe = _pipe(s, run_id, drive)
+    pipe.poll_once()  # Drive creates the file; client sees a 500 anyway
+    row = _rows(run_id)[0]
+    assert row['state'] == 'exporting'
+    assert row['uploaded_to_export'] == 0
+    assert drive.real_upload_calls == 1
+    pipe.poll_once()  # retry: found via find_by_app_property, no re-upload
+    row = _rows(run_id)[0]
+    assert row['state'] == 'archived'
+    assert row['uploaded_to_export'] == 1
+    assert drive.real_upload_calls == 1
+
+
 def test_export_does_not_reupload_once_flag_recorded():
     # Defensive/regression check on the skip branch itself: if a row is
     # somehow re-selected while still 'exporting' but already has
@@ -672,7 +711,7 @@ def test_export_does_not_reupload_once_flag_recorded():
     # failed to commit for an unrelated reason), _export must not upload a
     # second time.
     class UploadShouldNotBeCalled(FakeDrive):
-        def upload_file(self, token, parent_id, filename, data, mime_type=None):
+        def upload_file(self, token, parent_id, filename, data, mime_type=None, app_properties=None):
             raise AssertionError('upload_file must not be called: already recorded done')
 
     drive = UploadShouldNotBeCalled({'keep_1.jpg': _jpeg_bytes(1)})
@@ -745,12 +784,12 @@ class FlakyArchiveDrive(FakeDrive):
         self.move_calls += 1
         return super().move_file(token, file_id, new_parent_id, old_parent_id)
 
-    def upload_file(self, token, parent_id, filename, data, mime_type=None):
+    def upload_file(self, token, parent_id, filename, data, mime_type=None, app_properties=None):
         if filename.endswith('.bbp.json'):
             self.sidecar_upload_attempts += 1
             if self.sidecar_upload_attempts == 1:
                 raise DriveHTTPError(500)
-        return super().upload_file(token, parent_id, filename, data, mime_type)
+        return super().upload_file(token, parent_id, filename, data, mime_type, app_properties)
 
 
 def test_archive_retry_after_sidecar_failure_does_not_remove_or_reupload():
@@ -770,6 +809,47 @@ def test_archive_retry_after_sidecar_failure_does_not_remove_or_reupload():
     assert row['state'] == 'archived'
     assert drive.move_calls == 1
     assert drive.sidecar_upload_attempts == 2
+
+
+class SidecarSucceedsButResponseLost(FakeDrive):
+    """The exact scenario named in review: Drive creates the sidecar, but
+    the upload response is lost before sidecar_uploaded is persisted. A
+    correct retry must discover the already-created sidecar via its
+    bbp_photo_id tag and not upload a duplicate."""
+
+    def __init__(self, files):
+        super().__init__(files)
+        self.real_sidecar_upload_calls = 0
+
+    def upload_file(self, token, parent_id, filename, data, mime_type=None, app_properties=None):
+        if not filename.endswith('.bbp.json'):
+            return super().upload_file(token, parent_id, filename, data, mime_type, app_properties)
+        self.real_sidecar_upload_calls += 1
+        result = super().upload_file(token, parent_id, filename, data, mime_type, app_properties)
+        if self.real_sidecar_upload_calls == 1:
+            raise DriveHTTPError(500)  # Drive succeeded; the response didn't
+        return result
+
+
+def test_archive_sidecar_retry_after_lost_response_does_not_duplicate():
+    drive = SidecarSucceedsButResponseLost({'skip_1.jpg': _jpeg_bytes(1)})
+    s = _session(autonomous=True)
+    run_id = _run(s['id'])
+    pipe = _pipe(s, run_id, drive)
+    pipe.poll_once()  # move succeeds; sidecar upload "succeeds" server-side
+                       # but the client sees a 500
+    row = _rows(run_id)[0]
+    assert row['state'] == 'rejected'
+    assert row['moved_to_archive'] == 1
+    assert row['sidecar_uploaded'] == 0
+    assert drive.real_sidecar_upload_calls == 1
+    pipe.poll_once()  # retry: sidecar found via find_by_app_property, not re-uploaded
+    row = _rows(run_id)[0]
+    assert row['state'] == 'archived'
+    assert row['sidecar_uploaded'] == 1
+    assert drive.real_sidecar_upload_calls == 1
+    sidecar_uploads = [u for u in drive.uploads if u[1].endswith('.bbp.json')]
+    assert len(sidecar_uploads) == 1
 
 
 def test_apply_decision_raises_when_run_not_active():

@@ -423,21 +423,32 @@ class Pipeline:
             if self._auth_error:
                 return
             try:
-                # uploaded_to_export is a per-row flag, not a Drive-side name
-                # lookup: filenames repeat across a run (camera numbering
-                # resets across cards/folders), so "does Drive already have a
-                # file with this name" can match a *different* photo and
-                # wrongly skip this row's own upload. Retrying only re-uploads
-                # when *this row* hasn't already recorded success.
+                # uploaded_to_export is a per-row flag, checked first as a
+                # cheap local skip. But a retry can also mean "Drive already
+                # received and created the file — the response was lost
+                # before we recorded it locally", which the flag alone can't
+                # tell apart from "never uploaded". find_by_app_property asks
+                # Drive itself, keyed by this row's own id (not filename, so
+                # two different photos sharing a filename can never collide
+                # on it): if a prior attempt's upload actually landed, this
+                # finds it and skips re-uploading; if not, it uploads once,
+                # tagged with the same key for the next retry to find.
                 if not row['uploaded_to_export']:
-                    path = self._export_path(row)
-                    with open(path, 'rb') as fh:
-                        data = fh.read()
-                    created = self._drive.upload_file(
-                        token, self.session['exportFolderId'], row['filename'], data)
+                    export_folder = self.session['exportFolderId']
+                    existing = self._drive.find_by_app_property(
+                        token, export_folder, 'bbp_photo_id', str(row['id']))
+                    if existing:
+                        export_id = existing['id']
+                    else:
+                        path = self._export_path(row)
+                        with open(path, 'rb') as fh:
+                            data = fh.read()
+                        created = self._drive.upload_file(
+                            token, export_folder, row['filename'], data,
+                            app_properties={'bbp_photo_id': str(row['id'])})
+                        export_id = created.get('id')
                     self._set_photo_state(
-                        row['id'], uploaded_to_export=1,
-                        exported_file_id=created.get('id'))
+                        row['id'], uploaded_to_export=1, exported_file_id=export_id)
                 self._set_photo_state(row['id'], state='exported')
             except Exception as exc:
                 self._handle_step_exception(row, exc, 'export_failed')
@@ -477,11 +488,19 @@ class Pipeline:
                         self.session['sourceFolderId'])
                     self._set_photo_state(row['id'], moved_to_archive=1)
                 if not row['sidecar_uploaded']:
-                    sidecar_name = f"{row['filename']}{SIDECAR_SUFFIX}"
-                    sidecar = self._build_sidecar(row)
-                    self._drive.upload_file(
-                        token, archive_id, sidecar_name,
-                        json.dumps(sidecar).encode('utf-8'), 'application/json')
+                    # Same Drive-side ground-truth check as _export, for the
+                    # same reason: a retry after a lost response must not
+                    # upload a second sidecar, and the check must be keyed by
+                    # this row's own id, not the (possibly shared) filename.
+                    existing_sidecar = self._drive.find_by_app_property(
+                        token, archive_id, 'bbp_photo_id', str(row['id']))
+                    if not existing_sidecar:
+                        sidecar_name = f"{row['filename']}{SIDECAR_SUFFIX}"
+                        sidecar = self._build_sidecar(row)
+                        self._drive.upload_file(
+                            token, archive_id, sidecar_name,
+                            json.dumps(sidecar).encode('utf-8'), 'application/json',
+                            app_properties={'bbp_photo_id': str(row['id'])})
                     self._set_photo_state(row['id'], sidecar_uploaded=1)
                 self._set_photo_state(row['id'], state='archived')
             except Exception as exc:
