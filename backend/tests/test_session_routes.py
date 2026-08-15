@@ -86,6 +86,8 @@ _ROUTE_SPECS = [
     ('DELETE', '/sessions/1'),
     ('POST', '/sessions/1/preflight'),
     ('POST', '/sessions/1/start'),
+    ('GET', '/sessions/1/runs'),
+    ('GET', '/sessions/1/runs/1'),
     ('POST', '/runs/active/stop'),
     ('GET', '/runs/active'),
     ('GET', '/runs/1/photos'),
@@ -265,6 +267,68 @@ def test_start_run_unknown_session_404():
     r = c.post('/sessions/999/start')
     assert r.status_code == 404
     assert r.get_json()['error'] == 'not_found'
+
+
+def test_sessions_runs_list_and_not_found():
+    c = _client()
+    r = c.get('/sessions/999/runs')
+    assert r.status_code == 404
+    assert r.get_json()['error'] == 'not_found'
+
+    sid = _create_session(c)
+    r = c.get(f'/sessions/{sid}/runs')
+    assert r.status_code == 200
+    assert r.get_json()['runs'] == []
+
+    run_id = _insert_run(sid)
+    _insert_photo(run_id, drive_file_id='d1', filename='a.jpg', state='awaiting_review')
+    r = c.get(f'/sessions/{sid}/runs')
+    assert r.status_code == 200
+    runs = r.get_json()['runs']
+    assert len(runs) == 1
+    assert runs[0]['id'] == run_id
+    assert runs[0]['sessionId'] == sid
+    assert runs[0]['counts']['awaiting_review'] == 1
+
+
+def test_sessions_run_single_and_not_found():
+    c = _client()
+    # Unknown session
+    r = c.get('/sessions/999/runs/1')
+    assert r.status_code == 404
+    assert r.get_json()['error'] == 'not_found'
+
+    sid1 = _create_session(c, name='Session 1')
+    sid2 = _create_session(c, name='Session 2')
+    run_id1 = _insert_run(sid1)
+    _insert_photo(run_id1, drive_file_id='d1', filename='a.jpg', state='awaiting_review')
+
+    conn = db.get()
+    conn.execute(
+        "INSERT INTO run_errors (run_id, at, code, detail, fix) VALUES (?, 't', 'E1', 'Something broke', 'Retry')",
+        (run_id1,)
+    )
+    conn.commit()
+
+    # Unknown run in session 1
+    r = c.get(f'/sessions/{sid1}/runs/999')
+    assert r.status_code == 404
+    assert r.get_json()['error'] == 'not_found'
+
+    # Run exists but belongs to sid1, requested under sid2
+    r = c.get(f'/sessions/{sid2}/runs/{run_id1}')
+    assert r.status_code == 404
+    assert r.get_json()['error'] == 'not_found'
+
+    # Happy path
+    r = c.get(f'/sessions/{sid1}/runs/{run_id1}')
+    assert r.status_code == 200
+    run_data = r.get_json()['run']
+    assert run_data['id'] == run_id1
+    assert run_data['sessionId'] == sid1
+    assert run_data['error'] == 'Something broke'
+    assert run_data['counts']['awaiting_review'] == 1
+    assert run_data['counts']['failed'] == 0
 
 
 # -- runs ----------------------------------------------------------------------

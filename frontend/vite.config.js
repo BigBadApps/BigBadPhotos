@@ -17,10 +17,16 @@ export default defineConfig({
       '/auth':    API_PROXY,
       '/drive':   API_PROXY,
       '/edit':    API_PROXY,
-      '/sessions': API_PROXY,
+      '/sessions': {
+        target: API_PROXY,
+        bypass(req) {
+          if (req.method === 'GET' && req.headers.accept?.includes('text/html')) return req.url
+        },
+      },
       '/runs':    API_PROXY,
       '/photos':  API_PROXY,
       '/settings': API_PROXY,
+      '/google':  API_PROXY,
     },
   },
   build: {

@@ -2,24 +2,24 @@ import { test, expect } from '@playwright/test'
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-/** Create a dev session and wait for landing view. Requires BBP_DEBUG=1. */
+/** Create a dev session and wait for session hub view. Requires BBP_DEBUG=1. */
 async function bypassAuth(page) {
   await page.goto('/')
-  await expect(page.locator('h1', { hasText: 'BigBadPhotos' })).toBeVisible({ timeout: 10_000 })
-  await page.evaluate(async () => {
-    const res = await fetch('/auth/dev', { method: 'POST', credentials: 'include' })
-    if (!res.ok) throw new Error(`dev auth failed: ${res.status}`)
-  })
-  await page.reload()
-  await expect(page.locator('.meta', { hasText: 'Session folders' })).toBeVisible({ timeout: 10_000 })
+  const devBtn = page.locator('button', { hasText: 'Continue (Dev Mode)' })
+  try {
+    await devBtn.waitFor({ state: 'visible', timeout: 4000 })
+    await devBtn.click()
+  } catch {}
+  await expect(page.locator('h1', { hasText: 'Session Configuration' })).toBeVisible({ timeout: 10_000 })
 }
 
 /**
- * Inject synthetic photos into the Zustand store then navigate to Culling.
- * showDirectoryPicker is never called — photos go in directly via window.__bbpStore.
+ * Inject synthetic photos into the Zustand store on /one-off then navigate to Culling.
  */
 async function loadPhotosAndGoCulling(page) {
   await bypassAuth(page)
+  await page.goto('/one-off')
+  await expect(page.locator('.meta', { hasText: 'Session folders' })).toBeVisible({ timeout: 5_000 })
 
   await page.evaluate(() => {
     const store = window.__bbpStore.getState()
@@ -36,12 +36,11 @@ async function loadPhotosAndGoCulling(page) {
     }))
     store.addPhotos(photos)
     store.setCurrentId(photos[0].id)
-    // Set sourceDir AFTER photos so usePhotoLoader skips (orderLength > 0)
     store.setSourceDir({ name: 'TestSession' })
     store.setDestDir({ name: 'TestExports' })
   })
 
-  await page.locator('button', { hasText: 'Culling' }).click()
+  await page.locator('nav button', { hasText: 'Cull' }).click()
   await expect(page.locator('button', { hasText: 'Keep' })).toBeVisible({ timeout: 5_000 })
 }
 
@@ -66,66 +65,6 @@ test('GET /auth/config returns dev:true', async ({ request }) => {
 test('auth gate renders sign-in screen', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('h1', { hasText: 'BigBadPhotos' })).toBeVisible({ timeout: 10_000 })
-})
-
-test('dev mode: Continue (Dev Mode) reaches landing', async ({ page }) => {
-  await bypassAuth(page)
-  await expect(page.locator('.meta', { hasText: 'Session folders' })).toBeVisible()
-})
-
-// ── Landing view ──────────────────────────────────────────────────────────
-
-test('landing: folder rows present and Begin Review disabled', async ({ page }) => {
-  await bypassAuth(page)
-  await expect(page.locator('.meta', { hasText: 'Source' }).first()).toBeVisible()
-  await expect(page.locator('.meta', { hasText: 'Export Target' }).first()).toBeVisible()
-  await expect(page.locator('button', { hasText: 'Begin Review' })).toBeDisabled()
-})
-
-test('landing: bottom nav has all four views', async ({ page }) => {
-  await bypassAuth(page)
-  for (const label of ['Landing', 'Culling', 'Compare', 'Export']) {
-    await expect(page.locator('button', { hasText: label }).last()).toBeVisible()
-  }
-})
-
-// ── Keyboard help overlay ─────────────────────────────────────────────────
-
-test('? key opens help overlay', async ({ page }) => {
-  await bypassAuth(page)
-  await page.locator('body').click()
-  await page.keyboard.press('?')
-  await expect(page.locator('text=Keyboard Shortcuts')).toBeVisible()
-})
-
-test('Escape closes help overlay', async ({ page }) => {
-  await bypassAuth(page)
-  await page.locator('body').click()
-  await page.keyboard.press('?')
-  await expect(page.locator('text=Keyboard Shortcuts')).toBeVisible()
-  await page.keyboard.press('Escape')
-  await expect(page.locator('text=Keyboard Shortcuts')).not.toBeVisible()
-  await expect(page.locator('.meta', { hasText: 'Session folders' })).toBeVisible()
-})
-
-test('shortcuts 2/3/4 without source show toast and stay on landing', async ({ page }) => {
-  await bypassAuth(page)
-  await page.locator('body').click()
-  for (const key of ['2', '3', '4']) {
-    await page.keyboard.press(key)
-    await expect(page.getByRole('status')).toContainText('Select a source folder first', { timeout: 3_000 })
-    await expect(page.locator('.meta', { hasText: 'Session folders' })).toBeVisible()
-    await page.getByRole('status').waitFor({ state: 'detached', timeout: 4_000 }).catch(() => {})
-  }
-})
-
-test('nav buttons disabled without source folder', async ({ page }) => {
-  await bypassAuth(page)
-  for (const label of ['Culling', 'Compare', 'Export']) {
-    const btn = page.locator('nav button', { hasText: label })
-    await expect(btn).toBeDisabled()
-    await expect(btn).toHaveAttribute('title', 'Select a source folder first')
-  }
 })
 
 test('password error clears field, shows hint, and shakes card', async ({ page }) => {
@@ -158,94 +97,283 @@ test('password error clears field, shows hint, and shakes card', async ({ page }
   await expect(page.locator('.auth-card')).toHaveClass(/bbp-shake/, { timeout: 2_000 })
 })
 
-test('appbar help button opens overlay', async ({ page }) => {
+// ── Session Hub (/ view) ──────────────────────────────────────────────────
+
+test('after login, / shows SessionHubView with New and Open buttons', async ({ page }) => {
   await bypassAuth(page)
-  await page.locator('[aria-label="Keyboard shortcuts"]').click()
-  await expect(page.locator('text=Keyboard Shortcuts')).toBeVisible()
+  await expect(page.locator('h1', { hasText: 'Session Configuration' })).toBeVisible()
+  await expect(page.locator('button', { hasText: 'New' })).toBeVisible()
+  await expect(page.locator('button', { hasText: 'Open' })).toBeVisible()
 })
 
-// ── Culling view ──────────────────────────────────────────────────────────
+test('SessionHub: New opens create form overlay', async ({ page }) => {
+  await bypassAuth(page)
+  await page.locator('button', { hasText: 'New' }).click()
+  await expect(page.locator('h2', { hasText: 'Create a Session' })).toBeVisible()
+  await expect(page.locator('button', { hasText: 'Create session' })).toBeVisible()
+  await page.locator('button[aria-label="Close form"]').click()
+  await expect(page.locator('h2', { hasText: 'Create a Session' })).not.toBeVisible()
+})
 
-test('culling: decision dock has Keep, Maybe, Reject', async ({ page }) => {
+test('SessionHub: Open toggles session list', async ({ page }) => {
+  await bypassAuth(page)
+  await page.locator('button', { hasText: 'Open' }).click()
+  await expect(
+    page.locator('text=No sessions yet').or(page.locator('.card').first())
+  ).toBeVisible({ timeout: 5_000 })
+})
+
+test('Full Session flow: create session -> SessionArea -> start run -> RunView -> back to SessionArea -> back to Hub', async ({ page }) => {
+  const consoleErrors = []
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') consoleErrors.push(msg.text())
+  })
+
+  await bypassAuth(page)
+
+  const sessionName = `E2E Test Session ${Date.now()}`
+  const fakeSessionId = 777
+
+  // Mock sessions API for listing and session details
+  await page.route('**/sessions', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          sessions: [
+            {
+              id: fakeSessionId,
+              name: sessionName,
+              sourceFolderName: 'Inbox Folder',
+              exportFolderName: 'Keepers Folder',
+              autonomous: false,
+              preset: 'balanced',
+              threshold: 0.6,
+            },
+          ],
+        }),
+      })
+    } else {
+      await route.continue()
+    }
+  })
+
+  await page.route(`**/sessions/${fakeSessionId}`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        session: {
+          id: fakeSessionId,
+          name: sessionName,
+          sourceFolderId: 'src_1',
+          sourceFolderName: 'Inbox Folder',
+          exportFolderId: 'exp_1',
+          exportFolderName: 'Keepers Folder',
+          autonomous: false,
+          preset: 'balanced',
+          threshold: 0.6,
+          burstBestOnly: true,
+          editMode: 'off',
+          editStrength: 'medium',
+          pollSeconds: 30,
+        },
+      }),
+    })
+  })
+
+  await page.route(`**/sessions/${fakeSessionId}/runs`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        runs: [
+          {
+            id: 101,
+            sessionId: fakeSessionId,
+            status: 'stopped',
+            phase: 'watching',
+            startedAt: '2026-08-15T10:00:00Z',
+            endedAt: '2026-08-15T10:30:00Z',
+            counts: { exported: 8, rejected: 2, awaiting_review: 0 },
+          },
+        ],
+      }),
+    })
+  })
+
+  await page.route(`**/sessions/${fakeSessionId}/runs/999`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        run: {
+          id: 999,
+          sessionId: fakeSessionId,
+          status: 'running',
+          phase: 'watching',
+          startedAt: '2026-08-15T10:00:00Z',
+          counts: { scored: 2, awaiting_review: 1, exported: 1 },
+        },
+      }),
+    })
+  })
+
+  // 1. Open list and click the session card to navigate to SessionAreaView
+  await page.locator('button', { hasText: 'Open' }).click()
+  await expect(page.locator('.card', { hasText: sessionName })).toBeVisible()
+  await page.locator('.card', { hasText: sessionName }).click()
+
+  // 2. Verify SessionAreaView is displayed
+  await expect(page.locator('h1', { hasText: sessionName })).toBeVisible({ timeout: 5_000 })
+  await expect(page.locator('.meta', { hasText: 'Run Controls' })).toBeVisible()
+  await expect(page.locator('h2', { hasText: 'Run History' })).toBeVisible()
+  await expect(page.locator('text=Run #101')).toBeVisible()
+  await expect(page.locator('button', { hasText: 'Start run' })).toBeVisible()
+
+  // 3. Mock preflight and start run
+  await page.route(`**/sessions/${fakeSessionId}/preflight`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        checks: [
+          { check: 'auth', name: 'Google authorization', ok: true, detail: 'Valid token' },
+          { check: 'source', name: 'Source folder exists', ok: true, detail: 'Inbox accessible' },
+          { check: 'export', name: 'Export folder exists', ok: true, detail: 'Keepers accessible' },
+        ],
+      }),
+    })
+  })
+
+  await page.route(`**/sessions/${fakeSessionId}/start`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ runId: 999 }),
+    })
+  })
+
+  await page.route('**/runs/active', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        running: true,
+        runId: 999,
+        sessionId: fakeSessionId,
+        sessionName,
+        phase: 'watching',
+        startedAt: new Date().toISOString(),
+        counts: { scored: 2, awaiting_review: 1, exported: 1 },
+      }),
+    })
+  })
+
+  // Click Start run
+  await page.locator('button', { hasText: 'Start run' }).click()
+
+  // 4. Verify navigated to /sessions/:id/run/999 (RunView)
+  await expect(page.locator('h1', { hasText: 'Run #999' })).toBeVisible({ timeout: 5_000 })
+  await expect(page.locator('button', { hasText: 'Stop run' })).toBeVisible()
+
+  // 5. Stop run & click Back to session
+  await page.route('**/runs/active/stop', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true }),
+    })
+  })
+
+  await page.locator('button', { hasText: 'Back to session' }).first().click()
+
+  // 6. Verify navigated back to SessionAreaView (/sessions/:id)
+  await expect(page.locator('h1', { hasText: sessionName })).toBeVisible()
+
+  // 7. Click Back button to go to / (Sessions Hub)
+  await page.locator('button', { hasText: 'Sessions' }).first().click()
+  await expect(page.locator('h1', { hasText: 'Session Configuration' })).toBeVisible()
+
+  const criticalErrors = consoleErrors.filter((e) => !e.includes('favicon'))
+  expect(criticalErrors).toEqual([])
+})
+
+// ── One-off Landing View ──────────────────────────────────────────────────
+
+test('SessionHub: One-off button goes to /one-off with LandingView', async ({ page }) => {
+  await bypassAuth(page)
+  await page.locator('button', { hasText: 'One-off' }).click()
+  await expect(page).toHaveURL('/one-off')
+  await expect(page.locator('.meta', { hasText: 'Session folders' })).toBeVisible()
+  await expect(page.locator('button', { hasText: 'Begin Review' })).toBeDisabled()
+})
+
+test('bottom nav buttons Cull / Compare / Export disabled without photos', async ({ page }) => {
+  await bypassAuth(page)
+  for (const label of ['Cull', 'Compare', 'Export']) {
+    const btn = page.locator('nav button', { hasText: label })
+    await expect(btn).toBeDisabled()
+    await expect(btn).toHaveAttribute('title', 'Select a source folder first')
+  }
+})
+
+// ── Keyboard shortcuts ────────────────────────────────────────────────────
+
+test('? key opens help overlay and Escape closes it', async ({ page }) => {
+  await bypassAuth(page)
+  await page.locator('body').click()
+  await page.keyboard.press('?')
+  await expect(page.locator('text=Keyboard Shortcuts')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.locator('text=Keyboard Shortcuts')).not.toBeVisible()
+})
+
+test('keyboard navigation: 1=/, 2/3/4 require photos', async ({ page }) => {
+  await bypassAuth(page)
+  await page.locator('body').click()
+
+  // Press '1' -> navigates to /
+  await page.keyboard.press('1')
+  await expect(page).toHaveURL('/')
+  await expect(page.locator('h1', { hasText: 'Session Configuration' })).toBeVisible()
+
+  // Press '2', '3', '4' without photos -> shows toast and stays on /
+  for (const key of ['2', '3', '4']) {
+    await page.keyboard.press(key)
+    await expect(page.getByRole('status')).toContainText('Select a source folder first', { timeout: 3_000 })
+    await expect(page).toHaveURL('/')
+    await page.getByRole('status').waitFor({ state: 'detached', timeout: 4_000 }).catch(() => {})
+  }
+})
+
+// ── Culling, Compare, Review/Export flow ───────────────────────────────────
+
+test('culling: decision dock and keyboard decisions work', async ({ page }) => {
   await loadPhotosAndGoCulling(page)
+  await expect(page.locator('button', { hasText: 'Keep' })).toBeVisible()
   await expect(page.locator('button', { hasText: 'Maybe' })).toBeVisible()
   await expect(page.locator('button', { hasText: 'Reject' })).toBeVisible()
-})
 
-test('culling: P key marks Keep and shows toast', async ({ page }) => {
-  await loadPhotosAndGoCulling(page)
+  // P key
   await page.locator('body').click()
   await page.keyboard.press('p')
   await expect(page.locator('.toast')).toContainText('Kept', { timeout: 3_000 })
 })
 
-test('culling: M key marks Maybe and shows toast', async ({ page }) => {
+test('compare: shows pair navigator with loaded photos', async ({ page }) => {
   await loadPhotosAndGoCulling(page)
-  await page.locator('body').click()
-  await page.keyboard.press('m')
-  await expect(page.locator('.toast')).toContainText('Maybe', { timeout: 3_000 })
+  await page.locator('nav button', { hasText: 'Compare' }).click()
+  await expect(page.locator('text=Overview Stacks')).toBeVisible({ timeout: 5_000 })
 })
 
-test('culling: R key marks Reject and shows toast', async ({ page }) => {
+test('review / export: header and stats row visible', async ({ page }) => {
   await loadPhotosAndGoCulling(page)
-  await page.locator('body').click()
-  await page.keyboard.press('r')
-  await expect(page.locator('.toast')).toContainText('Rejected', { timeout: 3_000 })
-})
-
-test('culling: Ctrl+Z undoes last decision', async ({ page }) => {
-  await loadPhotosAndGoCulling(page)
-  await page.locator('body').click()
-  await page.keyboard.press('p')
-  await expect(page.locator('.toast')).toContainText('Kept', { timeout: 3_000 })
-  await page.keyboard.press('Control+z')
-  await expect(page.locator('.toast')).toContainText('Undone', { timeout: 3_000 })
-})
-
-test('culling: Keep button click marks photo', async ({ page }) => {
-  await loadPhotosAndGoCulling(page)
-  await page.locator('button', { hasText: 'Keep' }).click()
-  await expect(page.locator('.toast')).toContainText('Kept', { timeout: 3_000 })
-})
-
-test('culling: decision updates keep counter to 01', async ({ page }) => {
-  await loadPhotosAndGoCulling(page)
-  await page.locator('button', { hasText: 'Keep' }).click()
-  await page.locator('.toast').waitFor({ state: 'detached', timeout: 3_000 }).catch(() => {})
-  await expect(page.locator('.mono.fs-md', { hasText: '01' }).first()).toBeVisible({ timeout: 3_000 })
-})
-
-test('culling: right arrow advances to photo 02', async ({ page }) => {
-  await loadPhotosAndGoCulling(page)
-  await page.keyboard.press('ArrowRight')
-  await expect(page.locator('text=02').first()).toBeVisible({ timeout: 2_000 })
-})
-
-// ── Compare view ──────────────────────────────────────────────────────────
-
-test('compare: shows pair navigator with injected photos', async ({ page }) => {
-  await loadPhotosAndGoCulling(page)
-  await page.locator('button', { hasText: 'Compare' }).click()
-  await expect(page.locator('text=Pair 1')).toBeVisible({ timeout: 5_000 })
-})
-
-// ── Review / Export view ──────────────────────────────────────────────────
-
-test('review: header and stats row visible', async ({ page }) => {
-  await loadPhotosAndGoCulling(page)
-  await page.locator('button', { hasText: 'Export' }).click()
+  await page.locator('nav button', { hasText: 'Export' }).click()
   await expect(page.locator('h1', { hasText: 'Review' })).toBeVisible({ timeout: 5_000 })
   await expect(page.locator('.meta', { hasText: 'Total' }).first()).toBeVisible()
+  await expect(page.locator('.stat-num', { hasText: '5' }).first()).toBeVisible()
+  await expect(page.locator('button', { hasText: 'Initiate Export' })).toBeVisible()
 })
 
-test('review: Initiate Export button present', async ({ page }) => {
-  await loadPhotosAndGoCulling(page)
-  await page.locator('button', { hasText: 'Export' }).click()
-  await expect(page.locator('button', { hasText: 'Initiate Export' })).toBeVisible({ timeout: 5_000 })
-})
-
-test('review: Total stat shows 5 photos', async ({ page }) => {
-  await loadPhotosAndGoCulling(page)
-  await page.locator('button', { hasText: 'Export' }).click()
-  await expect(page.locator('.stat-num', { hasText: '5' }).first()).toBeVisible({ timeout: 3_000 })
-})

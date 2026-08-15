@@ -2,11 +2,13 @@ import Icon from './Icon';
 
 export default function AppBar({ view, step, totalSteps, onHelp, projectName }) {
   const viewLabels = {
-    landing: 'Landing',
+    sessions: 'Sessions',
+    landing: 'One-off',
     culling: 'Culling',
     compare: 'Compare',
     edit: 'AI Edit',
     export: 'Review & Export',
+    'review-queue': 'Review Queue',
   };
   return (
     <header className="appbar">

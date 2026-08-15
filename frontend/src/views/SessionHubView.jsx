@@ -2,114 +2,44 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Icon from '../components/Icon'
 import GoogleDriveFolderPicker from '../components/GoogleDriveFolderPicker'
+import { OblToggle, Chip, FieldLabel, PickerRow, PRESETS } from '../components/SessionFormParts'
 import * as sessionsClient from '../api/sessionsClient'
 import { useStore } from '../store'
 
-const PRESETS = { strict: 0.72, balanced: 0.60, loose: 0.45 }
-
-function OblToggle({ checked, onChange }) {
-  return (
-    <label className="toggle">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-      <span className="toggle-track"><span className="toggle-thumb" /></span>
-    </label>
-  )
-}
-
-function Chip({ active, onClick, children }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="btn fs-xs"
-      style={{
-        flex: 1,
-        minHeight: 44,
-        background: active ? 'color-mix(in oklab, var(--accent) 18%, var(--bg-3))' : 'var(--bg-3)',
-        color: active ? 'var(--accent)' : 'var(--fg-2)',
-        border: active ? '1px solid color-mix(in oklab, var(--accent) 55%, var(--line))' : '1px solid var(--line)',
-      }}
-    >
-      {children}
-    </button>
-  )
-}
-
-function FieldLabel({ children }) {
-  return (
-    <div className="meta" style={{ marginBottom: 'var(--sp-2)' }}>{children}</div>
-  )
-}
-
-function PickerRow({ label, value, placeholder, onPick }) {
-  return (
-    <div>
-      <FieldLabel>{label}</FieldLabel>
-      <button
-        type="button"
-        onClick={onPick}
-        style={{
-          width: '100%',
-          minHeight: 44,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          padding: '10px 12px',
-          borderRadius: 8,
-          textAlign: 'left',
-          background: value ? 'color-mix(in oklab, var(--keep) 10%, transparent)' : 'var(--bg-3)',
-          border: value
-            ? '1px solid color-mix(in oklab, var(--keep) 30%, transparent)'
-            : '1px solid var(--line)',
-          color: value ? 'var(--keep)' : 'var(--fg-2)',
-        }}
-      >
-        <Icon name={value ? 'folderOpen' : 'folder'} size={18} style={{ flexShrink: 0 }} />
-        <span className="fs-sm" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {value || placeholder}
-        </span>
-        <Icon name="arrowR" size={14} style={{ opacity: 0.5, flexShrink: 0 }} />
-      </button>
-    </div>
-  )
-}
-
-export default function SessionsView() {
+export default function SessionHubView() {
   const navigate = useNavigate()
   const setSessions = useStore((s) => s.setSessions)
-  const setActiveSession = useStore((s) => s.setActiveSession)
   const [sessions, setLocalSessions] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [listError, setListError] = useState(null)
   const [inbox, setInbox] = useState(null)
+  const [showList, setShowList] = useState(false)
   const [formOpen, setFormOpen] = useState(false)
-  const [editingId, setEditingId] = useState(null)
   const [form, setForm] = useState(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(null)
   const [pickerTarget, setPickerTarget] = useState(null)
-  const [confirmDeleteId, setConfirmDeleteId] = useState(null)
-  const [deleting, setDeleting] = useState(false)
 
   const refreshSessions = useCallback(async () => {
+    setLoading(true)
     try {
       const data = await sessionsClient.listSessions()
-      setLocalSessions(data.sessions || [])
-      setSessions(data.sessions || [])
+      const list = data.sessions || []
+      setLocalSessions(list)
+      setSessions(list)
       setListError(null)
     } catch (err) {
-      setListError(err.message)
+      setListError(err.message || 'Failed to load sessions')
     } finally {
       setLoading(false)
     }
   }, [setSessions])
 
   useEffect(() => {
-    refreshSessions()
     sessionsClient.getSettings()
       .then((data) => setInbox(data))
       .catch(() => {})
-  }, [refreshSessions])
+  }, [])
 
   const blankForm = useCallback(() => ({
     name: '',
@@ -127,39 +57,26 @@ export default function SessionsView() {
   }), [inbox])
 
   const openCreate = useCallback(() => {
-    setEditingId(null)
     setForm(blankForm())
     setSaveError(null)
     setFormOpen(true)
   }, [blankForm])
 
-  const openEdit = useCallback((session) => {
-    setEditingId(session.id)
-    setActiveSession(session)
-    setForm({
-      name: session.name,
-      sourceFolderId: session.sourceFolderId,
-      sourceFolderName: session.sourceFolderName,
-      exportFolderId: session.exportFolderId,
-      exportFolderName: session.exportFolderName,
-      autonomous: Boolean(session.autonomous),
-      preset: session.preset || 'balanced',
-      threshold: typeof session.threshold === 'number' ? session.threshold : PRESETS.balanced,
-      burstBestOnly: session.burstBestOnly !== false,
-      editMode: session.editMode || 'off',
-      editStrength: session.editStrength || 'medium',
-      pollSeconds: session.pollSeconds || 30,
-    })
-    setSaveError(null)
-    setFormOpen(true)
-  }, [setActiveSession])
-
   const closeForm = useCallback(() => {
     setFormOpen(false)
-    setEditingId(null)
     setForm(null)
     setSaveError(null)
   }, [])
+
+  const toggleOpenList = useCallback(() => {
+    setShowList((prev) => {
+      const next = !prev
+      if (next) {
+        refreshSessions()
+      }
+      return next
+    })
+  }, [refreshSessions])
 
   const setField = useCallback((key, value) => {
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev))
@@ -213,34 +130,20 @@ export default function SessionsView() {
       pollSeconds: Number(form.pollSeconds) || 30,
     }
     try {
-      if (editingId) {
-        await sessionsClient.updateSession(editingId, payload)
+      const res = await sessionsClient.createSession(payload)
+      const newId = res.session?.id || res.id
+      if (newId) {
+        navigate(`/sessions/${newId}`)
       } else {
-        await sessionsClient.createSession(payload)
+        await refreshSessions()
+        closeForm()
       }
-      await refreshSessions()
-      closeForm()
     } catch (err) {
-      setSaveError(err.message)
+      setSaveError(err.message || 'Failed to create session')
     } finally {
       setSaving(false)
     }
-  }, [form, saving, editingId, refreshSessions, closeForm])
-
-  const handleDelete = useCallback(async (sessionId) => {
-    if (deleting) return
-    setDeleting(true)
-    try {
-      await sessionsClient.deleteSession(sessionId)
-      setConfirmDeleteId(null)
-      await refreshSessions()
-    } catch (err) {
-      setListError(err.message)
-      setConfirmDeleteId(null)
-    } finally {
-      setDeleting(false)
-    }
-  }, [deleting, refreshSessions])
+  }, [form, saving, navigate, refreshSessions, closeForm])
 
   const sessionSummary = useMemo(() => {
     const summaries = {}
@@ -261,148 +164,147 @@ export default function SessionsView() {
       <div style={{ marginBottom: 'var(--sp-7)' }}>
         <div className="meta" style={{ color: 'var(--accent)', marginBottom: 8 }}>· Photo Sessions</div>
         <h1 style={{ margin: 0, fontSize: 'clamp(32px, 4vw, 48px)', fontWeight: 700, letterSpacing: 'var(--tracking-tight)', lineHeight: 1.05 }}>
-          Sessions
+          Session Configuration
         </h1>
         <p style={{ margin: '12px 0 0', color: 'var(--fg-2)', fontSize: 'var(--fs-md)', maxWidth: '45ch' }}>
           A session ties a Drive inbox to an export folder, a keeper rule, and an edit mode.
         </p>
       </div>
 
-      {listError && (
-        <div style={{
-          marginBottom: 'var(--sp-4)',
-          background: 'color-mix(in oklab, var(--reject) 10%, transparent)',
-          border: '1px solid color-mix(in oklab, var(--reject) 30%, transparent)',
-          borderRadius: 10,
-          padding: 'var(--sp-3)',
-        }}>
-          <p className="fs-sm" style={{ color: 'var(--reject)', margin: 0 }}>{listError}</p>
-        </div>
-      )}
-
-      {loading ? (
-        <div className="fs-sm dim" style={{ padding: 'var(--sp-5)', textAlign: 'center' }}>
-          Loading sessions…
-        </div>
-      ) : sessions.length === 0 ? (
-        <div style={{
-          background: 'var(--bg-2)',
-          border: '1px solid var(--line)',
-          borderRadius: 10,
-          padding: 'var(--sp-6)',
-          textAlign: 'center',
-        }}>
-          <Icon name="folder" size={48} style={{ color: 'var(--fg-4)' }} />
-          <p className="fs-sm" style={{ color: 'var(--fg-2)', margin: '12px 0 0' }}>
-            No sessions yet. Create one to start shooting into a named workflow.
-          </p>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
-          {sessions.map((session) => (
-            <div key={session.id} className="card" style={{ padding: 'var(--sp-4)' }}>
-              <div className="flex jcsb aic" style={{ gap: 'var(--sp-2)' }}>
-                <div style={{ minWidth: 0 }}>
-                  <div className="fs-md" style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {session.name}
-                  </div>
-                  <div className="meta" style={{ marginTop: 4 }}>
-                    {sessionSummary[session.id]}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => navigate(`/sessions/${session.id}`)}
-                  className="btn btn-primary"
-                  style={{ padding: '0 14px', flexShrink: 0 }}
-                  aria-label={`Run ${session.name}`}
-                >
-                  <Icon name="arrowR" size={16} />
-                  Run
-                </button>
-              </div>
-              <div style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 2,
-                marginTop: 'var(--sp-3)',
-                paddingTop: 'var(--sp-3)',
-                borderTop: '1px solid var(--line)',
-              }}>
-                <div className="fs-xs dim" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  Source · {session.sourceFolderName || session.sourceFolderId}
-                </div>
-                <div className="fs-xs dim" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  Export · {session.exportFolderName || session.exportFolderId}
-                </div>
-              </div>
-              <div className="flex" style={{ gap: 'var(--sp-2)', marginTop: 'var(--sp-3)' }}>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  style={{ flex: 1, padding: '0 14px' }}
-                  onClick={() => openEdit(session)}
-                >
-                  <Icon name="cog" size={16} />
-                  Edit
-                </button>
-                {confirmDeleteId === session.id ? (
-                  <>
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      style={{ flex: 1, padding: '0 14px' }}
-                      onClick={() => setConfirmDeleteId(null)}
-                      disabled={deleting}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-uppercase"
-                      style={{
-                        flex: 1,
-                        padding: '0 14px',
-                        background: 'color-mix(in oklab, var(--reject) 15%, var(--bg-3))',
-                        color: 'var(--reject)',
-                        borderColor: 'color-mix(in oklab, var(--reject) 40%, var(--line))',
-                      }}
-                      onClick={() => handleDelete(session.id)}
-                      disabled={deleting}
-                    >
-                      {deleting ? 'Deleting…' : 'Confirm'}
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    style={{ flex: 1, padding: '0 14px', color: 'var(--reject)' }}
-                    onClick={() => setConfirmDeleteId(session.id)}
-                  >
-                    <Icon name="x" size={16} />
-                    Delete
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div style={{ position: 'sticky', bottom: 56, marginTop: 'var(--sp-6)', paddingTop: 'var(--sp-3)', background: 'var(--bg)', zIndex: 5 }}>
-        <button type="button" className="btn btn-primary btn-uppercase" style={{ width: '100%' }} onClick={openCreate}>
-          ＋ New Session
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 'var(--sp-4)', maxWidth: 560, marginBottom: 'var(--sp-6)' }}>
+        <button
+          type="button"
+          className="btn btn-primary btn-uppercase"
+          style={{ height: 56, fontSize: 'var(--fs-sm)', gap: 10 }}
+          onClick={openCreate}
+        >
+          <span style={{ fontSize: 18, lineHeight: 1 }}>＋</span>
+          <span>New</span>
+        </button>
+        <button
+          type="button"
+          className={showList ? 'btn btn-primary btn-uppercase' : 'btn btn-ghost btn-uppercase'}
+          style={{ height: 56, fontSize: 'var(--fs-sm)', gap: 10 }}
+          onClick={toggleOpenList}
+        >
+          <Icon name="folderOpen" size={18} />
+          <span>Open</span>
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost btn-uppercase"
+          style={{ height: 56, fontSize: 'var(--fs-sm)', gap: 10 }}
+          onClick={() => navigate('/one-off')}
+        >
+          <Icon name="zap" size={18} />
+          <span>One-off</span>
         </button>
       </div>
 
+      {showList && (
+        <div style={{ maxWidth: 640 }}>
+          {listError && (
+            <div style={{
+              marginBottom: 'var(--sp-4)',
+              background: 'color-mix(in oklab, var(--reject) 10%, transparent)',
+              border: '1px solid color-mix(in oklab, var(--reject) 30%, transparent)',
+              borderRadius: 10,
+              padding: 'var(--sp-3)',
+            }}>
+              <p className="fs-sm" style={{ color: 'var(--reject)', margin: 0 }}>{listError}</p>
+            </div>
+          )}
+
+          {loading ? (
+            <div className="fs-sm dim" style={{ padding: 'var(--sp-5)', textAlign: 'center' }}>
+              Loading sessions…
+            </div>
+          ) : sessions.length === 0 ? (
+            <div style={{
+              background: 'var(--bg-2)',
+              border: '1px solid var(--line)',
+              borderRadius: 10,
+              padding: 'var(--sp-6)',
+              textAlign: 'center',
+            }}>
+              <Icon name="folder" size={48} style={{ color: 'var(--fg-4)' }} />
+              <p className="fs-sm" style={{ color: 'var(--fg-2)', margin: '12px 0 0' }}>
+                No sessions yet. Create one to start shooting into a named workflow.
+              </p>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
+              {sessions.map((session) => (
+                <div
+                  key={session.id}
+                  className="card"
+                  onClick={() => navigate(`/sessions/${session.id}`)}
+                  style={{
+                    padding: 'var(--sp-4)',
+                    cursor: 'pointer',
+                    transition: 'border-color .15s var(--ease-out), background-color .15s var(--ease-out)',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = 'color-mix(in oklab, var(--accent) 50%, var(--line))'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = 'var(--line)'
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      navigate(`/sessions/${session.id}`)
+                    }
+                  }}
+                >
+                  <div className="flex jcsb aic" style={{ gap: 'var(--sp-2)' }}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div className="fs-md" style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {session.name}
+                      </div>
+                      <div className="meta" style={{ marginTop: 4 }}>
+                        {sessionSummary[session.id]}
+                      </div>
+                    </div>
+                    <div
+                      className="btn btn-ghost"
+                      style={{ padding: '0 12px', height: 32, flexShrink: 0, gap: 6, pointerEvents: 'none' }}
+                    >
+                      <span className="fs-xs">Open</span>
+                      <Icon name="arrowR" size={14} />
+                    </div>
+                  </div>
+                  <div style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 2,
+                    marginTop: 'var(--sp-3)',
+                    paddingTop: 'var(--sp-3)',
+                    borderTop: '1px solid var(--line)',
+                  }}>
+                    <div className="fs-xs dim" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      Source · {session.sourceFolderName || session.sourceFolderId}
+                    </div>
+                    <div className="fs-xs dim" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      Export · {session.exportFolderName || session.exportFolderId}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {formOpen && form && (
-        <div className="view" style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'var(--bg)', padding: 'var(--pad)', paddingBottom: 96 }}>
+        <div className="view" style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'var(--bg)', padding: 'var(--pad)', paddingBottom: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
           <div className="flex jcsb aic" style={{ marginBottom: 'var(--sp-5)' }}>
             <div>
-              <div className="meta" style={{ color: 'var(--accent)', marginBottom: 4 }}>{editingId ? 'Edit session' : 'New session'}</div>
+              <div className="meta" style={{ color: 'var(--accent)', marginBottom: 4 }}>New session</div>
               <h2 style={{ margin: 0, fontSize: 'var(--fs-2xl)', fontWeight: 700, letterSpacing: 'var(--tracking-tight)' }}>
-                {editingId ? form.name || 'Untitled' : 'Create a Session'}
+                Create a Session
               </h2>
             </div>
             <button type="button" className="btn btn-ghost" onClick={closeForm} aria-label="Close form">
@@ -410,7 +312,7 @@ export default function SessionsView() {
             </button>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-5)' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-5)', paddingBottom: 80 }}>
             <div>
               <FieldLabel>Name</FieldLabel>
               <input
@@ -550,7 +452,7 @@ export default function SessionsView() {
             )}
           </div>
 
-          <div style={{ position: 'sticky', bottom: 56, marginTop: 'var(--sp-6)', paddingTop: 'var(--sp-3)', background: 'var(--bg)', zIndex: 5 }}>
+          <div style={{ position: 'sticky', bottom: 56, marginTop: 'var(--sp-8)', paddingTop: 'var(--sp-4)', paddingBottom: 'var(--sp-3)', background: 'var(--bg)', zIndex: 5 }}>
             <button
               type="button"
               className="btn btn-primary btn-uppercase"
@@ -558,7 +460,7 @@ export default function SessionsView() {
               onClick={handleSave}
               disabled={saving}
             >
-              {saving ? 'Saving…' : editingId ? 'Save changes' : 'Create session'}
+              {saving ? 'Saving…' : 'Create session'}
             </button>
           </div>
         </div>
