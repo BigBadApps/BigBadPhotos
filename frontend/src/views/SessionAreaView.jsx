@@ -150,6 +150,7 @@ export default function SessionAreaView() {
     setEditOpen(false)
     setEditForm(null)
     setSaveEditError(null)
+    setConfirmDelete(false)
   }, [])
 
   const setEditField = useCallback((key, value) => {
