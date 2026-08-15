@@ -35,6 +35,10 @@ export function deleteSession(sessionId) {
   return jsonFetch(`/sessions/${sessionId}`, { method: 'DELETE' })
 }
 
+export function listRuns(sessionId) {
+  return jsonFetch(`/sessions/${sessionId}/runs`)
+}
+
 export function preflight(sessionId) {
   return jsonFetch(`/sessions/${sessionId}/preflight`, { method: 'POST' })
 }

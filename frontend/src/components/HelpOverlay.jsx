@@ -7,7 +7,7 @@ export default function HelpOverlay({ open, onClose }) {
     { title: 'Decisions',  items: [['P', 'Keep'], ['M', 'Maybe'], ['R', 'Reject']] },
     { title: 'Navigation', items: [['→', 'Next photo'], ['←', 'Previous photo'], ['Esc', 'Back / cancel']] },
     { title: 'Actions',    items: [['⌘Z', 'Undo last'], ['⌘⇧Z', 'Redo'], ['?', 'This menu'], ['/', 'Search']] },
-    { title: 'View',       items: [['1', 'Landing'], ['2', 'Culling'], ['3', 'Compare'], ['4', 'Export']] },
+    { title: 'View',       items: [['1', 'Sessions'], ['2', 'One-off'], ['3', 'Culling'], ['4', 'Compare'], ['5', 'Export']] },
   ];
 
   return (

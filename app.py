@@ -571,6 +571,52 @@ def sessions_delete(session_id):
     return jsonify({'ok': True})
 
 
+@app.get('/sessions/<int:session_id>/runs')
+def sessions_runs(session_id):
+    auth_err = enforce_auth()
+    if auth_err:
+        return auth_err
+    s = sessions.get(session_id)
+    if s is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'session not found: {session_id}'}), 404
+    conn = db.get()
+    run_rows = conn.execute(
+        'SELECT * FROM runs WHERE session_id = ? ORDER BY started_at DESC',
+        (session_id,)
+    ).fetchall()
+
+    runs_list = []
+    for r in run_rows:
+        run_id = r['id']
+        counts = {state: 0 for state in pipeline.STATES}
+        for count_row in conn.execute(
+            'SELECT state, COUNT(*) as count FROM photos WHERE run_id = ? GROUP BY state',
+            (run_id,)
+        ):
+            counts[count_row['state']] = count_row['count']
+
+        err_row = conn.execute(
+            'SELECT detail FROM run_errors WHERE run_id = ? ORDER BY id DESC LIMIT 1',
+            (run_id,)
+        ).fetchone()
+        error_msg = err_row['detail'] if err_row else None
+
+        runs_list.append({
+            'id': run_id,
+            'sessionId': r['session_id'],
+            'status': r['status'],
+            'phase': r['phase'],
+            'startedAt': r['started_at'],
+            'endedAt': r['ended_at'],
+            'lastPollAt': r['last_poll_at'],
+            'error': error_msg,
+            'counts': counts,
+        })
+
+    return jsonify({'runs': runs_list})
+
+
 @app.post('/sessions/<int:session_id>/preflight')
 def sessions_preflight(session_id):
     s = sessions.get(session_id)

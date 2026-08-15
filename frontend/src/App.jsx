@@ -4,6 +4,7 @@ import { useStore } from './store';
 import GoogleGate from './components/GoogleGate';
 import AppBar from './components/AppBar';
 import HelpOverlay from './components/HelpOverlay';
+import SessionHubView from './views/SessionHubView';
 import LandingView from './views/LandingView';
 import CullingView from './views/CullingView';
 import CompareView from './views/CompareView';
@@ -90,7 +91,8 @@ function AppContent() {
     threshold: autoThreshold,
   })
 
-  const currentView = location.pathname === '/'        ? 'landing'
+  const currentView = location.pathname === '/'        ? 'sessions'
+    : location.pathname === '/one-off' ? 'landing'
     : location.pathname === '/cull'    ? 'culling'
     : location.pathname === '/compare' ? 'compare'
     : location.pathname === '/edit'    ? 'edit'
@@ -124,22 +126,17 @@ function AppContent() {
         return;
       }
       if (k === '1' && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); navigate('/'); return; }
-      if (k === '2' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (k === '2' && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); navigate('/one-off'); return; }
+      if (k === '3' && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         if (!hasPhotos) { setToast({ message: 'Select a source folder first', at: Date.now() }); return; }
         navigate('/cull');
         return;
       }
-      if (k === '3' && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        e.preventDefault();
-        if (!hasPhotos) { setToast({ message: 'Select a source folder first', at: Date.now() }); return; }
-        navigate('/compare');
-        return;
-      }
       if (k === '4' && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         if (!hasPhotos) { setToast({ message: 'Select a source folder first', at: Date.now() }); return; }
-        navigate('/edit');
+        navigate('/compare');
         return;
       }
       if (k === '5' && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -446,7 +443,8 @@ function AppContent() {
       )}
       <div style={{ flex: 1, position: 'relative', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <Routes>
-          <Route path="/" element={
+          <Route path="/" element={<SessionHubView />} />
+          <Route path="/one-off" element={
             <LandingView
               state={landingState}
               onSelectSource={pickSource}
@@ -509,11 +507,12 @@ function AppContent() {
         background: 'color-mix(in oklab, var(--bg-2) 85%, transparent)',
         backdropFilter: 'blur(12px)', border: '1px solid var(--line)',
         borderRadius: 999, zIndex: 40, boxShadow: 'var(--shadow-2)',
-      }}>          {[
-          ['/', 'Landing', false],
-          ['/cull', 'Culling', true],
+      }}>
+        {[
+          ['/', 'Sessions', false],
+          ['/one-off', 'One-off', false],
+          ['/cull', 'Cull', true],
           ['/compare', 'Compare', true],
-          ['/edit', 'Edit', true],
           ['/review', 'Export', true],
         ].map(([path, label, needsPhotos]) => {
           const disabled = needsPhotos && !hasPhotos;
