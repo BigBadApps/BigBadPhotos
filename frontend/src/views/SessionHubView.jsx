@@ -171,7 +171,7 @@ export default function SessionHubView() {
         </p>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 'var(--sp-4)', maxWidth: 520, marginBottom: 'var(--sp-6)' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 'var(--sp-4)', maxWidth: 560, marginBottom: 'var(--sp-6)' }}>
         <button
           type="button"
           className="btn btn-primary btn-uppercase"
@@ -189,6 +189,15 @@ export default function SessionHubView() {
         >
           <Icon name="folderOpen" size={18} />
           <span>Open</span>
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost btn-uppercase"
+          style={{ height: 56, fontSize: 'var(--fs-sm)', gap: 10 }}
+          onClick={() => navigate('/one-off')}
+        >
+          <Icon name="zap" size={18} />
+          <span>One-off</span>
         </button>
       </div>
 
@@ -290,7 +299,7 @@ export default function SessionHubView() {
       )}
 
       {formOpen && form && (
-        <div className="view" style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'var(--bg)', padding: 'var(--pad)', paddingBottom: 96 }}>
+        <div className="view" style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'var(--bg)', padding: 'var(--pad)', paddingBottom: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
           <div className="flex jcsb aic" style={{ marginBottom: 'var(--sp-5)' }}>
             <div>
               <div className="meta" style={{ color: 'var(--accent)', marginBottom: 4 }}>New session</div>
@@ -303,7 +312,7 @@ export default function SessionHubView() {
             </button>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-5)' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-5)', paddingBottom: 80 }}>
             <div>
               <FieldLabel>Name</FieldLabel>
               <input
@@ -443,7 +452,7 @@ export default function SessionHubView() {
             )}
           </div>
 
-          <div style={{ position: 'sticky', bottom: 56, marginTop: 'var(--sp-6)', paddingTop: 'var(--sp-3)', background: 'var(--bg)', zIndex: 5 }}>
+          <div style={{ position: 'sticky', bottom: 56, marginTop: 'var(--sp-8)', paddingTop: 'var(--sp-4)', paddingBottom: 'var(--sp-3)', background: 'var(--bg)', zIndex: 5 }}>
             <button
               type="button"
               className="btn btn-primary btn-uppercase"
