@@ -226,8 +226,8 @@ export default function RunView() {
               <p className="fs-xs" style={{ color: 'var(--reject)', margin: '0 0 var(--sp-3)' }}>{runError}</p>
             )}
 
-            {/* Awaiting review action callout */}
-            {awaitingReviewCount > 0 && (
+            {/* Awaiting review action callout — only for live runs */}
+            {awaitingReviewCount > 0 && isLiveRun && (
               <div style={{
                 background: 'color-mix(in oklab, var(--maybe) 10%, var(--bg-3))',
                 border: '1px solid color-mix(in oklab, var(--maybe) 35%, var(--line))',
