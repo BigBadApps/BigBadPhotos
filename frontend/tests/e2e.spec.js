@@ -203,6 +203,23 @@ test('Full Session flow: create session -> SessionArea -> start run -> RunView -
     })
   })
 
+  await page.route(`**/sessions/${fakeSessionId}/runs/999`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        run: {
+          id: 999,
+          sessionId: fakeSessionId,
+          status: 'running',
+          phase: 'watching',
+          startedAt: '2026-08-15T10:00:00Z',
+          counts: { scored: 2, awaiting_review: 1, exported: 1 },
+        },
+      }),
+    })
+  })
+
   // 1. Open list and click the session card to navigate to SessionAreaView
   await page.locator('button', { hasText: 'Open' }).click()
   await expect(page.locator('.card', { hasText: sessionName })).toBeVisible()

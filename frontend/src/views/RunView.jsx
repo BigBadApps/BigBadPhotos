@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import Icon from '../components/Icon'
 import * as sessionsClient from '../api/sessionsClient'
 import { useSessionRun } from '../hooks/useSessionRun'
+import { formatRunDateRange, formatStatus } from '../utils/formatters'
 
 const STATE_LABELS = {
   claimed: 'Claimed',
@@ -16,26 +17,6 @@ const STATE_LABELS = {
   exported: 'Exported',
   archived: 'Archived',
   failed: 'Failed',
-}
-
-function formatRunDateRange(startedAt, endedAt) {
-  if (!startedAt) return '—'
-  const start = new Date(startedAt)
-  const datePart = start.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-  const startTime = start.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
-  if (!endedAt) {
-    return `${datePart}, ${startTime} – ongoing`
-  }
-  const end = new Date(endedAt)
-  const endTime = end.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
-  return `${datePart}, ${startTime}–${endTime}`
-}
-
-function formatStatus(status) {
-  if (!status) return 'Unknown'
-  if (status === 'running') return 'Running'
-  if (status === 'stopped') return 'Stopped'
-  return status.charAt(0).toUpperCase() + status.slice(1)
 }
 
 export default function RunView() {
@@ -69,10 +50,8 @@ export default function RunView() {
   const fetchPastRun = useCallback(async () => {
     setLoadingPastRun(true)
     try {
-      const data = await sessionsClient.listRuns(sessionId)
-      const runs = data.runs || []
-      const found = runs.find((r) => String(r.id) === String(runId))
-      setPastRun(found || null)
+      const data = await sessionsClient.getRun(sessionId, runId)
+      setPastRun(data.run || null)
     } catch {
       setPastRun(null)
     } finally {

@@ -2,77 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Icon from '../components/Icon'
 import GoogleDriveFolderPicker from '../components/GoogleDriveFolderPicker'
+import { OblToggle, Chip, FieldLabel, PickerRow, PRESETS } from '../components/SessionFormParts'
 import * as sessionsClient from '../api/sessionsClient'
 import { useStore } from '../store'
-
-const PRESETS = { strict: 0.72, balanced: 0.60, loose: 0.45 }
-
-function OblToggle({ checked, onChange }) {
-  return (
-    <label className="toggle">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-      <span className="toggle-track"><span className="toggle-thumb" /></span>
-    </label>
-  )
-}
-
-function Chip({ active, onClick, children }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="btn fs-xs"
-      style={{
-        flex: 1,
-        minHeight: 44,
-        background: active ? 'color-mix(in oklab, var(--accent) 18%, var(--bg-3))' : 'var(--bg-3)',
-        color: active ? 'var(--accent)' : 'var(--fg-2)',
-        border: active ? '1px solid color-mix(in oklab, var(--accent) 55%, var(--line))' : '1px solid var(--line)',
-      }}
-    >
-      {children}
-    </button>
-  )
-}
-
-function FieldLabel({ children }) {
-  return (
-    <div className="meta" style={{ marginBottom: 'var(--sp-2)' }}>{children}</div>
-  )
-}
-
-function PickerRow({ label, value, placeholder, onPick }) {
-  return (
-    <div>
-      <FieldLabel>{label}</FieldLabel>
-      <button
-        type="button"
-        onClick={onPick}
-        style={{
-          width: '100%',
-          minHeight: 44,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          padding: '10px 12px',
-          borderRadius: 8,
-          textAlign: 'left',
-          background: value ? 'color-mix(in oklab, var(--keep) 10%, transparent)' : 'var(--bg-3)',
-          border: value
-            ? '1px solid color-mix(in oklab, var(--keep) 30%, transparent)'
-            : '1px solid var(--line)',
-          color: value ? 'var(--keep)' : 'var(--fg-2)',
-        }}
-      >
-        <Icon name={value ? 'folderOpen' : 'folder'} size={18} style={{ flexShrink: 0 }} />
-        <span className="fs-sm" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {value || placeholder}
-        </span>
-        <Icon name="arrowR" size={14} style={{ opacity: 0.5, flexShrink: 0 }} />
-      </button>
-    </div>
-  )
-}
 
 export default function SessionHubView() {
   const navigate = useNavigate()

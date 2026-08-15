@@ -39,6 +39,10 @@ export function listRuns(sessionId) {
   return jsonFetch(`/sessions/${sessionId}/runs`)
 }
 
+export function getRun(sessionId, runId) {
+  return jsonFetch(`/sessions/${sessionId}/runs/${runId}`)
+}
+
 export function preflight(sessionId) {
   return jsonFetch(`/sessions/${sessionId}/preflight`, { method: 'POST' })
 }

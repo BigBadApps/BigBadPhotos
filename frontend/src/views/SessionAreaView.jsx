@@ -3,102 +3,10 @@ import { useParams, useNavigate } from 'react-router-dom'
 import Icon from '../components/Icon'
 import CheckRow from '../components/CheckRow'
 import GoogleDriveFolderPicker from '../components/GoogleDriveFolderPicker'
+import { OblToggle, Chip, FieldLabel, PickerRow, PRESETS } from '../components/SessionFormParts'
 import * as sessionsClient from '../api/sessionsClient'
 import { useSessionRun } from '../hooks/useSessionRun'
-
-const PRESETS = { strict: 0.72, balanced: 0.60, loose: 0.45 }
-
-function OblToggle({ checked, onChange, disabled }) {
-  return (
-    <label className="toggle" style={{ opacity: disabled ? 0.5 : 1 }}>
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-      <span className="toggle-track"><span className="toggle-thumb" /></span>
-    </label>
-  )
-}
-
-function Chip({ active, onClick, children }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="btn fs-xs"
-      style={{
-        flex: 1,
-        minHeight: 44,
-        background: active ? 'color-mix(in oklab, var(--accent) 18%, var(--bg-3))' : 'var(--bg-3)',
-        color: active ? 'var(--accent)' : 'var(--fg-2)',
-        border: active ? '1px solid color-mix(in oklab, var(--accent) 55%, var(--line))' : '1px solid var(--line)',
-      }}
-    >
-      {children}
-    </button>
-  )
-}
-
-function FieldLabel({ children }) {
-  return (
-    <div className="meta" style={{ marginBottom: 'var(--sp-2)' }}>{children}</div>
-  )
-}
-
-function PickerRow({ label, value, placeholder, onPick }) {
-  return (
-    <div>
-      <FieldLabel>{label}</FieldLabel>
-      <button
-        type="button"
-        onClick={onPick}
-        style={{
-          width: '100%',
-          minHeight: 44,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          padding: '10px 12px',
-          borderRadius: 8,
-          textAlign: 'left',
-          background: value ? 'color-mix(in oklab, var(--keep) 10%, transparent)' : 'var(--bg-3)',
-          border: value
-            ? '1px solid color-mix(in oklab, var(--keep) 30%, transparent)'
-            : '1px solid var(--line)',
-          color: value ? 'var(--keep)' : 'var(--fg-2)',
-        }}
-      >
-        <Icon name={value ? 'folderOpen' : 'folder'} size={18} style={{ flexShrink: 0 }} />
-        <span className="fs-sm" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {value || placeholder}
-        </span>
-        <Icon name="arrowR" size={14} style={{ opacity: 0.5, flexShrink: 0 }} />
-      </button>
-    </div>
-  )
-}
-
-function formatRunDateRange(startedAt, endedAt) {
-  if (!startedAt) return '—'
-  const start = new Date(startedAt)
-  const datePart = start.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-  const startTime = start.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
-  if (!endedAt) {
-    return `${datePart}, ${startTime} – ongoing`
-  }
-  const end = new Date(endedAt)
-  const endTime = end.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
-  return `${datePart}, ${startTime}–${endTime}`
-}
-
-function formatStatus(status) {
-  if (!status) return 'Unknown'
-  if (status === 'running') return 'Running'
-  if (status === 'stopped') return 'Stopped'
-  return status.charAt(0).toUpperCase() + status.slice(1)
-}
+import { formatRunDateRange, formatStatus } from '../utils/formatters'
 
 export default function SessionAreaView() {
   const { sessionId } = useParams()
@@ -305,6 +213,23 @@ export default function SessionAreaView() {
       setSavingEdit(false)
     }
   }, [editForm, savingEdit, sessionId, closeEdit])
+
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  const handleDelete = useCallback(async () => {
+    if (!confirmDelete || deleting) return
+    setDeleting(true)
+    try {
+      await sessionsClient.deleteSession(sessionId)
+      navigate('/')
+    } catch (err) {
+      setSaveEditError(err.message || 'Failed to delete session')
+      setConfirmDelete(false)
+    } finally {
+      setDeleting(false)
+    }
+  }, [confirmDelete, deleting, sessionId, navigate])
 
   const isRunning = Boolean(status?.running)
   const belongsToThisSession = isRunning && Number(status?.sessionId) === Number(sessionId)
@@ -897,7 +822,7 @@ export default function SessionAreaView() {
             )}
           </div>
 
-          <div style={{ position: 'sticky', bottom: 56, marginTop: 'var(--sp-6)', paddingTop: 'var(--sp-3)', background: 'var(--bg)', zIndex: 5 }}>
+          <div style={{ position: 'sticky', bottom: 56, marginTop: 'var(--sp-6)', paddingTop: 'var(--sp-3)', background: 'var(--bg)', zIndex: 5, display: 'flex', flexDirection: 'column', gap: 'var(--sp-3)' }}>
             <button
               type="button"
               className="btn btn-primary btn-uppercase"
@@ -907,6 +832,37 @@ export default function SessionAreaView() {
             >
               {savingEdit ? 'Saving…' : 'Save changes'}
             </button>
+            {!confirmDelete ? (
+              <button
+                type="button"
+                className="btn btn-uppercase"
+                style={{ width: '100%', color: 'var(--reject)', border: '1px solid color-mix(in oklab, var(--reject) 30%, transparent)', background: 'transparent' }}
+                onClick={() => setConfirmDelete(true)}
+                disabled={belongsToThisSession}
+              >
+                Delete session
+              </button>
+            ) : (
+              <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
+                <button
+                  type="button"
+                  className="btn btn-uppercase"
+                  style={{ flex: 1, color: 'var(--fg-2)' }}
+                  onClick={() => setConfirmDelete(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-uppercase"
+                  style={{ flex: 1, background: 'var(--reject)', color: '#fff' }}
+                  onClick={handleDelete}
+                  disabled={deleting}
+                >
+                  {deleting ? 'Deleting…' : 'Confirm delete'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
