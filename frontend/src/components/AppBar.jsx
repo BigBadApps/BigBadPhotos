@@ -8,6 +8,7 @@ export default function AppBar({ view, step, totalSteps, onHelp, projectName }) 
     compare: 'Compare',
     edit: 'AI Edit',
     export: 'Review & Export',
+    'review-queue': 'Review Queue',
   };
   return (
     <header className="appbar">

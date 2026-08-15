@@ -5,12 +5,12 @@ import GoogleGate from './components/GoogleGate';
 import AppBar from './components/AppBar';
 import HelpOverlay from './components/HelpOverlay';
 import SessionHubView from './views/SessionHubView';
+import SessionAreaView from './views/SessionAreaView';
 import LandingView from './views/LandingView';
 import CullingView from './views/CullingView';
 import CompareView from './views/CompareView';
 import EditView from './views/EditView';
 import ReviewExportView from './views/ReviewExportView';
-import SessionsView from './views/SessionsView';
 import RunView from './views/RunView';
 import ReviewQueueView from './views/ReviewQueueView';
 import { usePhotoLoader } from './hooks/usePhotoLoader';
@@ -91,11 +91,12 @@ function AppContent() {
     threshold: autoThreshold,
   })
 
-  const currentView = location.pathname === '/'        ? 'sessions'
+  const currentView = location.pathname === '/' || location.pathname.startsWith('/sessions') ? 'sessions'
     : location.pathname === '/one-off' ? 'landing'
     : location.pathname === '/cull'    ? 'culling'
     : location.pathname === '/compare' ? 'compare'
     : location.pathname === '/edit'    ? 'edit'
+    : location.pathname === '/review-queue' ? 'review-queue'
     : 'export';
 
   const stepMap = { landing: 2, culling: 3, compare: 4, edit: 5, export: 6 };
@@ -463,8 +464,9 @@ function AppContent() {
           <Route path="/compare" element={hasPhotos ? <CompareView /> : <Navigate to="/" />} />
           <Route path="/edit"    element={hasPhotos ? <EditView /> : <Navigate to="/" />} />
           <Route path="/review"  element={hasPhotos ? <ReviewExportView /> : <Navigate to="/" />} />
-          <Route path="/sessions" element={<SessionsView />} />
-          <Route path="/sessions/:sessionId" element={<RunView />} />
+          <Route path="/sessions" element={<Navigate to="/" replace />} />
+          <Route path="/sessions/:sessionId" element={<SessionAreaView />} />
+          <Route path="/sessions/:sessionId/run/:runId" element={<RunView />} />
           <Route path="/review-queue" element={<ReviewQueueView />} />
         </Routes>
         {driveConnecting && (
@@ -516,6 +518,9 @@ function AppContent() {
           ['/review', 'Export', true],
         ].map(([path, label, needsPhotos]) => {
           const disabled = needsPhotos && !hasPhotos;
+          const isActive = path === '/'
+            ? (location.pathname === '/' || location.pathname.startsWith('/sessions'))
+            : location.pathname === path;
           return (
             <button
               key={path}
@@ -525,8 +530,8 @@ function AppContent() {
               className="mono fs-xxs upper"
               style={{
                 padding: '8px 14px', borderRadius: 999,
-                background: location.pathname === path ? 'var(--accent-soft)' : 'transparent',
-                color: location.pathname === path ? 'var(--accent)' : disabled ? 'var(--fg-4)' : 'var(--fg-3)',
+                background: isActive ? 'var(--accent-soft)' : 'transparent',
+                color: isActive ? 'var(--accent)' : disabled ? 'var(--fg-4)' : 'var(--fg-3)',
                 opacity: disabled ? 0.45 : 1,
                 cursor: disabled ? 'not-allowed' : 'pointer',
                 transition: 'all .15s',
