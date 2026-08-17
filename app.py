@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory, session, Response
+from flask import Flask, request, jsonify, send_from_directory, session, Response, g
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 import cv2
 import numpy as np
@@ -18,9 +18,10 @@ from backend import db
 from backend import pipeline
 from backend import preflight
 from backend import sessions
+from backend import gallery
 from backend.scoring import (
     decode_image, score_sharpness, score_exposure, score_noise,
-    score_contrast, score_faces, compute_phash, hamming_distance,
+    score_contrast, score_artifacts, score_faces, compute_phash, hamming_distance,
     score_composition, composite_score,
 )
 from backend import scoring
@@ -107,7 +108,7 @@ def _safe_in_dir(source_dir: str, filename: str) -> str:
 
 
 @app.after_request
-def set_csrf_cookie(response):
+def set_response_cookies(response):
     response.set_cookie(
         'csrf_token',
         generate_csrf(),
@@ -115,6 +116,16 @@ def set_csrf_cookie(response):
         samesite='Lax',
         httponly=False
     )
+    if getattr(g, 'new_visitor', False) and getattr(g, 'visitor_id', None):
+        response.set_cookie(
+            'bbp_visitor',
+            g.visitor_id,
+            secure=not IS_DEBUG,
+            samesite='Lax',
+            httponly=False,
+            max_age=365 * 24 * 3600,
+            path='/gallery/',
+        )
     return response
 
 @app.before_request
@@ -552,11 +563,20 @@ def sessions_update(session_id):
             return jsonify({'error': 'run_in_progress',
                             'detail': 'stop the active run before changing '
                                       'this session\'s folders'}), 409
+    was_gallery_enabled = s.get('galleryEnabled', True)
     try:
         updated = sessions.update(session_id, data)
     except sessions.SessionError as e:
         return jsonify({'error': 'bad_config', 'detail': str(e)}), 400
-    return jsonify({'ok': True, 'session': updated})
+    drive_revoke_failed = []
+    if was_gallery_enabled and not updated.get('galleryEnabled', True):
+        drive_revoke_failed = _remove_gallery_drive_access(updated)
+    resp = {'ok': True, 'session': updated}
+    if drive_revoke_failed:
+        resp['driveRevokeWarning'] = (
+            'Gallery disabled, but Drive access could not be revoked for: '
+            + ', '.join(drive_revoke_failed))
+    return jsonify(resp)
 
 
 @app.delete('/sessions/<int:session_id>')
@@ -814,6 +834,488 @@ def settings_put():
     return jsonify(_settings_payload())
 
 
+# ---------------------------------------------------------------------------
+# Gallery helper functions and routes
+# ---------------------------------------------------------------------------
+
+
+def validate_gallery_token(token_value: str) -> dict | None:
+    if not token_value:
+        return None
+    token_dict = gallery.get_token_by_value(token_value)
+    if not token_dict:
+        return None
+    s = sessions.get(token_dict['sessionId'])
+    if not s or not s.get('galleryEnabled', True):
+        return None
+    return token_dict
+
+
+def _remove_gallery_drive_access(session_dict: dict) -> list[str]:
+    """Best-effort revoke of public Drive access; returns folder keys that failed."""
+    token = _google_token()
+    keys = ('exportFolderId', 'export_folder_id', 'favoritesFolderId', 'favorites_folder_id')
+    if not token:
+        return [k for k in keys if session_dict.get(k)]
+    failed = []
+    for key in keys:
+        folder = session_dict.get(key)
+        if folder:
+            try:
+                google_drive.remove_public_read(folder, token)
+            except Exception:
+                failed.append(key)
+    return failed
+
+
+def get_or_create_visitor_id() -> str:
+    visitor_id = request.cookies.get('bbp_visitor')
+    if visitor_id:
+        g.visitor_id = visitor_id
+        return visitor_id
+    if not getattr(g, 'visitor_id', None):
+        g.visitor_id = secrets.token_urlsafe(16)
+        g.new_visitor = True
+    return g.visitor_id
+
+
+# Photographer-facing gallery management routes (authenticated via enforce_auth)
+
+@app.get('/sessions/<int:session_id>/gallery')
+def session_gallery_get(session_id):
+    s = sessions.get(session_id)
+    if s is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'session not found: {session_id}'}), 404
+    tokens = gallery.get_tokens_for_session(session_id)
+    active_tokens = [t for t in tokens if not t.get('revoked')]
+    token_str = active_tokens[0]['token'] if active_tokens else (tokens[0]['token'] if tokens else '')
+    stats = gallery.get_gallery_stats(session_id)
+    return jsonify({
+        'token': token_str,
+        'gallery_url': f"/gallery/{token_str}" if token_str else '',
+        'galleryUrl': f"/gallery/{token_str}" if token_str else '',
+        'stats': stats,
+        'tokens': tokens,
+    })
+
+
+@app.get('/sessions/<int:session_id>/gallery/favorites')
+def session_gallery_favorites_get(session_id):
+    s = sessions.get(session_id)
+    if s is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'session not found: {session_id}'}), 404
+    return jsonify(gallery.get_aggregated_favorites(session_id))
+
+
+@app.get('/sessions/<int:session_id>/gallery/comments')
+def session_gallery_comments_get(session_id):
+    s = sessions.get(session_id)
+    if s is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'session not found: {session_id}'}), 404
+    return jsonify(gallery.get_all_comments_for_session(session_id))
+
+
+@app.post('/sessions/<int:session_id>/gallery/approve-favorites')
+def session_gallery_approve_favorites(session_id):
+    s = sessions.get(session_id)
+    if s is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'session not found: {session_id}'}), 404
+
+    data = request.get_json(silent=True) or {}
+    photo_ids = data.get('photo_ids') if 'photo_ids' in data else data.get('photoIds')
+    if not isinstance(photo_ids, list):
+        return jsonify({'error': 'bad_request',
+                        'detail': 'photo_ids must be a list of photo IDs'}), 400
+
+    export_folder_id = s.get('exportFolderId') or s.get('export_folder_id')
+    if not export_folder_id:
+        return jsonify({'error': 'bad_config',
+                        'detail': 'Session has no export folder configured'}), 400
+
+    drive_token = _google_token()
+    if not drive_token:
+        return jsonify({'error': 'drive_not_authorized',
+                        'detail': 'Google Drive is not connected'}), 401
+
+    session_name = s.get('name') or f'Session {session_id}'
+    fav_folder_name = f"{session_name} - Favorites"
+
+    try:
+        fav_folder = google_drive.ensure_folder(drive_token, export_folder_id, fav_folder_name)
+        google_drive.set_public_read(fav_folder['id'], drive_token)
+    except Exception as exc:
+        return jsonify({'error': 'drive_error',
+                        'detail': f'Failed to create favorites folder: {exc}'}), 502
+
+    conn = db.get()
+    copied_ids: list[int] = []
+    errors: list[dict] = []
+    for pid in photo_ids:
+        row = conn.execute(
+            "SELECT photos.id, photos.exported_file_id, photos.drive_file_id, photos.filename "
+            "FROM photos JOIN runs ON photos.run_id = runs.id "
+            "WHERE photos.id = ? AND runs.session_id = ?",
+            (pid, session_id),
+        ).fetchone()
+        if not row:
+            continue
+        file_to_copy = row['exported_file_id'] or row['drive_file_id']
+        if not file_to_copy:
+            continue
+        try:
+            google_drive.copy_file(file_to_copy, fav_folder['id'], drive_token)
+            copied_ids.append(int(row['id']))
+        except Exception as exc:
+            errors.append({'photo_id': int(row['id']), 'filename': row['filename'], 'error': str(exc)})
+
+    if not copied_ids and errors:
+        return jsonify({'error': 'drive_error',
+                        'detail': 'All file copies failed', 'errors': errors}), 502
+
+    if not copied_ids and not errors:
+        return jsonify({'error': 'bad_request',
+                        'detail': 'No valid photos found to approve'}), 400
+
+    sessions.update(session_id, {
+        'favoritesFolderId': fav_folder['id'],
+        'favoritesFolderName': fav_folder.get('name', fav_folder_name),
+    })
+
+    fav_token = gallery.create_token(
+        session_id,
+        label=f"{session_name} - Favorites",
+        scope='favorites',
+        photo_ids=copied_ids,
+    )
+
+    result: dict = {
+        'favorites_folder_id': fav_folder['id'],
+        'favoritesFolderId': fav_folder['id'],
+        'favorites_token': fav_token['token'],
+        'favoritesToken': fav_token['token'],
+        'favorites_url': f"/gallery/{fav_token['token']}",
+        'favoritesUrl': f"/gallery/{fav_token['token']}",
+        'copied_count': len(copied_ids),
+    }
+    if errors:
+        result['errors'] = errors
+    return jsonify(result), 201 if not errors else 207
+
+
+@app.post('/sessions/<int:session_id>/gallery/revoke')
+def session_gallery_revoke(session_id):
+    s = sessions.get(session_id)
+    if s is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'session not found: {session_id}'}), 404
+    gallery.revoke_tokens_for_session(session_id)
+    failed = _remove_gallery_drive_access(s)
+    resp = {'ok': True}
+    if failed:
+        resp['driveRevokeWarning'] = (
+            'Tokens revoked, but Drive access could not be revoked for: '
+            + ', '.join(failed))
+    return jsonify(resp)
+
+
+@app.post('/sessions/<int:session_id>/gallery/regenerate')
+def session_gallery_regenerate(session_id):
+    s = sessions.get(session_id)
+    if s is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'session not found: {session_id}'}), 404
+    gallery.revoke_tokens_for_session(session_id)
+    new_token = gallery.create_token(session_id, label='Main Gallery', scope='exports')
+    return jsonify({
+        'ok': True,
+        'token': new_token['token'],
+        'gallery_url': f"/gallery/{new_token['token']}",
+        'galleryUrl': f"/gallery/{new_token['token']}",
+        'token_info': new_token,
+        'tokenInfo': new_token,
+    })
+
+
+# Public gallery routes (token-gated)
+
+@app.get('/gallery/<token>')
+def gallery_view(token):
+    token_dict = validate_gallery_token(token)
+    if token_dict is None:
+        return jsonify({'error': 'not_found', 'detail': 'gallery not found'}), 404
+    get_or_create_visitor_id()
+    if not os.path.isdir(FRONTEND_DIST):
+        return jsonify({'error': 'Frontend not built. Run: cd frontend && npm run build'}), 503
+    return send_from_directory(FRONTEND_DIST, 'index.html')
+
+
+@app.get('/gallery/api/<token>/info')
+def gallery_api_info(token):
+    token_dict = validate_gallery_token(token)
+    if token_dict is None:
+        return jsonify({'error': 'not_found', 'detail': 'gallery not found'}), 404
+    s = sessions.get(token_dict['session_id'])
+    if s is None:
+        return jsonify({'error': 'not_found', 'detail': 'session not found'}), 404
+    conn = db.get()
+    count_row = conn.execute(
+        "SELECT COUNT(*) FROM photos JOIN runs ON photos.run_id = runs.id "
+        "WHERE runs.session_id = ? AND photos.state IN ('exported', 'archived')",
+        (token_dict['session_id'],),
+    ).fetchone()
+    photo_count = count_row[0] if count_row else 0
+    return jsonify({
+        'session_name': s['name'],
+        'sessionName': s['name'],
+        'photo_count': photo_count,
+        'photoCount': photo_count,
+        'scope': token_dict['scope'],
+        'gallery_label': token_dict['label'],
+        'galleryLabel': token_dict['label'],
+    })
+
+
+@app.get('/gallery/api/<token>/photos')
+def gallery_api_photos(token):
+    token_dict = validate_gallery_token(token)
+    if token_dict is None:
+        return jsonify({'error': 'not_found', 'detail': 'gallery not found'}), 404
+
+    try:
+        limit = min(max(int(request.args.get('limit', 50)), 1), 200)
+    except (TypeError, ValueError):
+        limit = 50
+
+    try:
+        offset = max(int(request.args.get('offset', 0)), 0)
+    except (TypeError, ValueError):
+        offset = 0
+
+    after_id_raw = request.args.get('after_id')
+    after_id = None
+    if after_id_raw is not None:
+        try:
+            after_id = int(after_id_raw)
+        except (TypeError, ValueError):
+            after_id = None
+
+    conn = db.get()
+    scope_photo_ids = token_dict.get('photo_ids')
+    scope_filter = ""
+    base_params: list = [token_dict['session_id']]
+    if token_dict.get('scope') == 'favorites' and scope_photo_ids:
+        placeholders = ','.join('?' for _ in scope_photo_ids)
+        scope_filter = f" AND photos.id IN ({placeholders})"
+        base_params.extend(scope_photo_ids)
+
+    count_row = conn.execute(
+        "SELECT COUNT(*) FROM photos JOIN runs ON photos.run_id = runs.id "
+        "WHERE runs.session_id = ? AND photos.state IN ('exported', 'archived')" + scope_filter,
+        base_params,
+    ).fetchone()
+    total_count = count_row[0] if count_row else 0
+
+    if after_id is not None:
+        rows = conn.execute(
+            "SELECT photos.* FROM photos JOIN runs ON photos.run_id = runs.id "
+            "WHERE runs.session_id = ? AND photos.state IN ('exported', 'archived')" + scope_filter +
+            " AND photos.id > ? ORDER BY photos.id ASC LIMIT ?",
+            base_params + [after_id, limit],
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT photos.* FROM photos JOIN runs ON photos.run_id = runs.id "
+            "WHERE runs.session_id = ? AND photos.state IN ('exported', 'archived')" + scope_filter +
+            " ORDER BY photos.id ASC LIMIT ? OFFSET ?",
+            base_params + [limit, offset],
+        ).fetchall()
+
+    photos_list = []
+    for p in rows:
+        photos_list.append({
+            'id': p['id'],
+            'filename': p['filename'],
+            'thumbnail_url': f"/gallery/api/{token}/photos/{p['id']}/thumb",
+            'thumbnailUrl': f"/gallery/api/{token}/photos/{p['id']}/thumb",
+            'created_at': p['claimed_at'],
+            'createdAt': p['claimed_at'],
+        })
+
+    resp = jsonify(photos_list)
+    resp.headers['X-Total-Count'] = str(total_count)
+    return resp
+
+
+@app.get('/gallery/api/<token>/photos/<int:photo_id>/thumb')
+def gallery_api_photo_thumb(token, photo_id):
+    token_dict = validate_gallery_token(token)
+    if token_dict is None:
+        return jsonify({'error': 'not_found', 'detail': 'gallery not found'}), 404
+
+    scope_ids = token_dict.get('photo_ids')
+    if token_dict.get('scope') == 'favorites' and scope_ids and photo_id not in scope_ids:
+        return jsonify({'error': 'not_found', 'detail': f'photo not found: {photo_id}'}), 404
+
+    row = db.get().execute(
+        "SELECT photos.drive_file_id, photos.exported_file_id, photos.filename FROM photos "
+        "JOIN runs ON photos.run_id = runs.id "
+        "WHERE photos.id = ? AND runs.session_id = ? AND photos.state IN ('exported', 'archived')",
+        (photo_id, token_dict['session_id']),
+    ).fetchone()
+    if row is None:
+        return jsonify({'error': 'not_found', 'detail': f'photo not found: {photo_id}'}), 404
+
+    file_id = row['exported_file_id'] or row['drive_file_id']
+    drive_token = _google_token()
+    if not drive_token:
+        return jsonify({'error': 'drive_error', 'detail': 'Drive not authorized on server'}), 502
+
+    try:
+        body, resolved_name, resolved_mime = google_drive.stream_file(
+            drive_token, file_id, filename=row['filename'])
+    except Exception as exc:
+        return jsonify({'error': 'drive_error', 'detail': str(exc)}), 502
+
+    return Response(body, mimetype=resolved_mime, headers={
+        'Content-Disposition': f'inline; filename="{resolved_name}"',
+        'Cache-Control': 'private, max-age=3600',
+    })
+
+
+@app.get('/gallery/api/<token>/photos/<int:photo_id>/full')
+def gallery_api_photo_full(token, photo_id):
+    token_dict = validate_gallery_token(token)
+    if token_dict is None:
+        return jsonify({'error': 'not_found', 'detail': 'gallery not found'}), 404
+
+    scope_ids = token_dict.get('photo_ids')
+    if token_dict.get('scope') == 'favorites' and scope_ids and photo_id not in scope_ids:
+        return jsonify({'error': 'not_found', 'detail': f'photo not found: {photo_id}'}), 404
+
+    row = db.get().execute(
+        "SELECT photos.drive_file_id, photos.exported_file_id, photos.filename FROM photos "
+        "JOIN runs ON photos.run_id = runs.id "
+        "WHERE photos.id = ? AND runs.session_id = ? AND photos.state IN ('exported', 'archived')",
+        (photo_id, token_dict['session_id']),
+    ).fetchone()
+    if row is None:
+        return jsonify({'error': 'not_found', 'detail': f'photo not found: {photo_id}'}), 404
+
+    file_id = row['exported_file_id'] or row['drive_file_id']
+    drive_token = _google_token()
+    if not drive_token:
+        return jsonify({'error': 'drive_error', 'detail': 'Drive not authorized on server'}), 502
+
+    try:
+        body, resolved_name, resolved_mime = google_drive.stream_file(
+            drive_token, file_id, filename=row['filename'])
+    except Exception as exc:
+        return jsonify({'error': 'drive_error', 'detail': str(exc)}), 502
+
+    return Response(body, mimetype=resolved_mime, headers={
+        'Content-Disposition': f'inline; filename="{resolved_name}"',
+        'Cache-Control': 'private, max-age=1800',
+    })
+
+
+@app.get('/gallery/api/<token>/favorites')
+def gallery_api_favorites_get(token):
+    token_dict = validate_gallery_token(token)
+    if token_dict is None:
+        return jsonify({'error': 'not_found', 'detail': 'gallery not found'}), 404
+    visitor_id = get_or_create_visitor_id()
+    favs = gallery.get_visitor_favorites(token_dict['id'], visitor_id)
+    return jsonify(favs)
+
+
+@app.post('/gallery/api/<token>/favorites/<int:photo_id>')
+def gallery_api_favorites_add(token, photo_id):
+    token_dict = validate_gallery_token(token)
+    if token_dict is None:
+        return jsonify({'error': 'not_found', 'detail': 'gallery not found'}), 404
+    scope_ids = token_dict.get('photo_ids')
+    if token_dict.get('scope') == 'favorites' and scope_ids and photo_id not in scope_ids:
+        return jsonify({'error': 'not_found', 'detail': f'photo not found: {photo_id}'}), 404
+    row = db.get().execute(
+        "SELECT photos.id FROM photos JOIN runs ON photos.run_id = runs.id "
+        "WHERE photos.id = ? AND runs.session_id = ? AND photos.state IN ('exported', 'archived')",
+        (photo_id, token_dict['session_id']),
+    ).fetchone()
+    if row is None:
+        return jsonify({'error': 'not_found', 'detail': f'photo not found: {photo_id}'}), 404
+    visitor_id = get_or_create_visitor_id()
+    gallery.add_favorite(token_dict['id'], photo_id, visitor_id)
+    return jsonify({'status': 'added'}), 201
+
+
+@app.delete('/gallery/api/<token>/favorites/<int:photo_id>')
+def gallery_api_favorites_remove(token, photo_id):
+    token_dict = validate_gallery_token(token)
+    if token_dict is None:
+        return jsonify({'error': 'not_found', 'detail': 'gallery not found'}), 404
+    visitor_id = get_or_create_visitor_id()
+    gallery.remove_favorite(token_dict['id'], photo_id, visitor_id)
+    return jsonify({'status': 'removed'}), 200
+
+
+@app.get('/gallery/api/<token>/comments')
+def gallery_api_comments_get(token):
+    token_dict = validate_gallery_token(token)
+    if token_dict is None:
+        return jsonify({'error': 'not_found', 'detail': 'gallery not found'}), 404
+    photo_id_arg = request.args.get('photo_id') or request.args.get('photoId')
+    if photo_id_arg is not None:
+        try:
+            photo_id = int(photo_id_arg)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'bad_request', 'detail': 'invalid photo_id'}), 400
+        comments = gallery.get_comments_for_photo(token_dict['id'], photo_id)
+    else:
+        comments = gallery.get_comments_for_gallery(token_dict['id'])
+    return jsonify(comments)
+
+
+@app.post('/gallery/api/<token>/comments')
+def gallery_api_comments_post(token):
+    token_dict = validate_gallery_token(token)
+    if token_dict is None:
+        return jsonify({'error': 'not_found', 'detail': 'gallery not found'}), 404
+    data = request.get_json(silent=True) or {}
+    body = data.get('body')
+    if not body or not isinstance(body, str) or not body.strip() or len(body.strip()) > 2000:
+        return jsonify({'error': 'bad_request', 'detail': 'body is required and must be 1-2000 characters'}), 400
+    body = body.strip()
+
+    photo_id = data.get('photo_id') if 'photo_id' in data else data.get('photoId')
+    if photo_id is not None:
+        try:
+            photo_id = int(photo_id)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'bad_request', 'detail': 'invalid photo_id'}), 400
+        scope_ids = token_dict.get('photo_ids')
+        if token_dict.get('scope') == 'favorites' and scope_ids and photo_id not in scope_ids:
+            return jsonify({'error': 'not_found', 'detail': f'photo not found: {photo_id}'}), 404
+        row = db.get().execute(
+            "SELECT photos.id FROM photos JOIN runs ON photos.run_id = runs.id "
+            "WHERE photos.id = ? AND runs.session_id = ? AND photos.state IN ('exported', 'archived')",
+            (photo_id, token_dict['session_id']),
+        ).fetchone()
+        if row is None:
+            return jsonify({'error': 'not_found', 'detail': f'photo not found: {photo_id}'}), 404
+
+    display_name = data.get('display_name') if 'display_name' in data else data.get('displayName')
+    if display_name is not None:
+        display_name = str(display_name).strip()[:100] or None
+
+    visitor_id = get_or_create_visitor_id()
+    comment = gallery.add_comment(token_dict['id'], photo_id, visitor_id, body, display_name)
+    return jsonify(comment), 201
+
+
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve_frontend(path):
@@ -857,6 +1359,7 @@ def analyze():
         exposure   = score_exposure(gray)
         noise      = score_noise(gray)
         contrast   = score_contrast(gray)
+        artifact   = score_artifacts(gray)
 
         return jsonify({
             "filename":        filename,
@@ -864,6 +1367,7 @@ def analyze():
             "exposure":        exposure,
             "noise":           noise,
             "contrast":        contrast,
+            "artifact_score":  artifact,
             "model":           "multi-metric-v1",
         })
 

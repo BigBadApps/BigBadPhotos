@@ -58,6 +58,7 @@ class FakeDrive:
         self.moves = []         # (file_id, new_parent_id, old_parent_id)
         self.ensure_calls = []  # (parent_id, name)
         self.find_calls = []    # (parent_id, name)
+        self.set_public_read_calls = []  # folder_id
         self._parents = {}      # name -> current parent_id
 
     def list_all(self, token, folder_id):
@@ -94,6 +95,10 @@ class FakeDrive:
             if up_parent == parent_id and up_props and up_props.get(key) == value:
                 return {'id': f'id-{up_name}', 'name': up_name}
         return None
+
+    def set_public_read(self, folder_id, token):
+        self.set_public_read_calls.append(folder_id)
+        return {'id': folder_id, 'role': 'reader', 'type': 'anyone'}
 
 
 class UploadFailing(FakeDrive):
@@ -879,3 +884,22 @@ def test_approve_all_raises_when_run_not_active():
     with pytest.raises(pipeline.RunNotActive):
         pipeline.approve_all(run_id)
     assert _rows(run_id)[0]['state'] == 'awaiting_review'
+
+
+def test_export_sets_public_read_on_export_folder():
+    drive = FakeDrive({'keep_1.jpg': _jpeg_bytes(1), 'keep_2.jpg': _jpeg_bytes(2)})
+    s = _session(autonomous=True)
+    run_id = _run(s['id'])
+    pipe = _pipe(s, run_id, drive)
+    pipe.poll_once()
+
+    # Both photos should reach exported/archived
+    rows = _rows(run_id)
+    assert all(r['state'] in ('exported', 'archived') for r in rows)
+    # set_public_read should be called on the export folder exactly once
+    assert drive.set_public_read_calls == [s['exportFolderId']]
+
+    # A second poll_once should not call set_public_read again
+    pipe.poll_once()
+    assert drive.set_public_read_calls == [s['exportFolderId']]
+

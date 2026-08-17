@@ -87,3 +87,31 @@ export function putSettings(payload) {
 export function createDriveFolder(parentId, name) {
   return jsonFetch('/drive/folders', { method: 'POST', body: { parentId, name } })
 }
+
+export function fetchGalleryInfo(sessionId) {
+  return jsonFetch(`/sessions/${sessionId}/gallery`)
+}
+
+export function fetchGalleryFavorites(sessionId) {
+  return jsonFetch(`/sessions/${sessionId}/gallery/favorites`)
+}
+
+export function fetchGalleryComments(sessionId) {
+  return jsonFetch(`/sessions/${sessionId}/gallery/comments`)
+}
+
+export function approveFavorites(sessionId, photoIds) {
+  return jsonFetch(`/sessions/${sessionId}/gallery/approve-favorites`, {
+    method: 'POST',
+    body: { photo_ids: photoIds },
+  })
+}
+
+export function revokeGallery(sessionId) {
+  return jsonFetch(`/sessions/${sessionId}/gallery/revoke`, { method: 'POST' })
+}
+
+export function regenerateGallery(sessionId) {
+  return jsonFetch(`/sessions/${sessionId}/gallery/regenerate`, { method: 'POST' })
+}
+

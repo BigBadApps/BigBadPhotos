@@ -203,6 +203,29 @@ test('Full Session flow: create session -> SessionArea -> start run -> RunView -
     })
   })
 
+  await page.route(`**/sessions/${fakeSessionId}/gallery`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        token: 'mock-session-gallery-tok',
+        gallery_url: '/gallery/mock-session-gallery-tok',
+        galleryUrl: '/gallery/mock-session-gallery-tok',
+        stats: { favorites_count: 3, comments_count: 1, unique_visitors: 2 },
+        tokens: [
+          {
+            id: 1,
+            session_id: fakeSessionId,
+            token: 'mock-session-gallery-tok',
+            label: 'Main Gallery',
+            scope: 'exports',
+            revoked: false,
+          },
+        ],
+      }),
+    })
+  })
+
   await page.route(`**/sessions/${fakeSessionId}/runs/999`, async (route) => {
     await route.fulfill({
       status: 200,

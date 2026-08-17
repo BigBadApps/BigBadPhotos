@@ -271,6 +271,50 @@ def test_rank_images_mediapipe_failure_degrades_whole_batch():
         assert "error" not in row
 
 
+def test_score_artifacts_clean_vs_compressed():
+    # 1. Image smaller than 64x64 returns 1.0
+    small = np.zeros((32, 32), dtype=np.uint8)
+    assert scoring.score_artifacts(small) == 1.0
+
+    # 2. Smooth gradient image (clean)
+    x = np.linspace(0, 255, 128, dtype=np.uint8)
+    clean = np.tile(x, (128, 1))
+    clean_score = scoring.score_artifacts(clean)
+
+    # 3. Create heavy JPEG compression block artifacts
+    # Encode with lowest quality JPEG (e.g. quality=5)
+    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 5]
+    _, compressed_buf = cv2.imencode('.jpg', clean, encode_param)
+    compressed_gray = cv2.imdecode(compressed_buf, cv2.IMREAD_GRAYSCALE)
+    compressed_score = scoring.score_artifacts(compressed_gray)
+
+    assert 0.0 <= compressed_score <= 1.0
+    assert 0.0 <= clean_score <= 1.0
+    assert clean_score > compressed_score
+
+
+def test_artifact_score_in_rank_results_and_composite_unchanged():
+    clean = _sharp_image()
+    results, errors = scoring.rank_images(
+        [('img1', 'clean.jpg', _jpeg(clean))],
+        deps={"mediapipe_runner": _NO_FACES_RUNNER}
+    )
+    assert errors == []
+    assert len(results) == 1
+    row = results[0]
+    assert 'artifact_score' in row
+    assert isinstance(row['artifact_score'], float)
+
+    # Verify composite_score formula weights: 0.40 * sharp + 0.30 * expo + 0.20 * noise + 0.10 * cont
+    expected_composite = scoring.composite_score(
+        row['sharpness'],
+        row['exposure']['exposure_score'],
+        row['noise']['noise_score'],
+        row['contrast']['contrast_score'],
+    )
+    assert row['overall_score'] == expected_composite
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

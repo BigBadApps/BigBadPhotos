@@ -269,6 +269,52 @@ def score_contrast(gray: np.ndarray) -> dict:
     }
 
 
+def score_artifacts(gray: np.ndarray) -> float:
+    """
+    Detect JPEG compression artifacts by measuring discontinuity at 8x8 DCT block boundaries
+    vs interior regions. Heavy compression creates visible grid patterns at block edges.
+
+    Returns float 0.0 (heavy artifacts) to 1.0 (clean/no artifacts).
+    """
+    h, w = gray.shape[:2]
+    if h < 64 or w < 64:
+        return 1.0
+
+    # Crop image to multiple of 8 in both dimensions
+    h_crop = (h // 8) * 8
+    w_crop = (w // 8) * 8
+    cropped = gray[:h_crop, :w_crop]
+
+    # Compute horizontal and vertical gradients
+    gx = cv2.Sobel(cropped, cv2.CV_32F, 1, 0, ksize=1)
+    gy = cv2.Sobel(cropped, cv2.CV_32F, 0, 1, ksize=1)
+    abs_gx = np.abs(gx)
+    abs_gy = np.abs(gy)
+
+    col_idx = np.arange(w_crop)
+    row_idx = np.arange(h_crop)
+
+    # DCT block boundary indices (multiples of 8, > 0)
+    v_bnd_mask = (col_idx % 8 == 0) & (col_idx > 0)
+    h_bnd_mask = (row_idx % 8 == 0) & (row_idx > 0)
+
+    # Boundary gradients vs interior gradients
+    gx_boundary = abs_gx[:, v_bnd_mask]
+    gx_interior = abs_gx[:, ~v_bnd_mask]
+
+    gy_boundary = abs_gy[h_bnd_mask, :]
+    gy_interior = abs_gy[~h_bnd_mask, :]
+
+    bnd_energy = (float(np.mean(gx_boundary)) + float(np.mean(gy_boundary))) / 2.0
+    int_energy = (float(np.mean(gx_interior)) + float(np.mean(gy_interior))) / 2.0
+
+    ratio = bnd_energy / (int_energy + 1e-6)
+
+    # Score: 1.0 when ratio <= 1.0, dropping toward 0 as ratio increases
+    score = 1.0 / (1.0 + max(0.0, ratio - 1.0) * 2.0)
+    return round(float(np.clip(score, 0.0, 1.0)), 4)
+
+
 def _score_faces_haar(gray: np.ndarray) -> dict:
     """
     Face + eye detection via Haar cascades (private fallback).
@@ -486,6 +532,7 @@ def rank_images(tasks: list[tuple[str, str, bytes]],
                 "exposure":     score_exposure(gray),
                 "noise":        score_noise(gray),
                 "contrast":     score_contrast(gray),
+                "artifact_score": score_artifacts(gray),
                 "subject":      subj,
                 "composition":  score_composition(gray, subj.get("primary_face_box")),
                 "phash":        compute_phash(gray),
@@ -566,6 +613,7 @@ def rank_images(tasks: list[tuple[str, str, bytes]],
             "exposure":      r["exposure"],
             "noise":         r["noise"],
             "contrast":      r["contrast"],
+            "artifact_score": r["artifact_score"],
             "subject":       subj,
             "composition":   r["composition"],
             "burst_group":   burst_group,
