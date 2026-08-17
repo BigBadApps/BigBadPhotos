@@ -9,7 +9,7 @@ from backend import db
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
 
 def _is_expired(expires_at: str | None) -> bool:
@@ -22,7 +22,7 @@ def _is_expired(expires_at: str | None) -> bool:
             exp_dt = exp_dt.replace(tzinfo=timezone.utc)
         return datetime.now(timezone.utc) > exp_dt
     except Exception:
-        return False
+        return True
 
 
 def _token_to_dict(row: sqlite3.Row) -> dict:

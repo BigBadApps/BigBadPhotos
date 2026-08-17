@@ -397,3 +397,37 @@ def folder_meta(access_token: str, folder_id: str) -> dict[str, Any]:
         'canAddChildren': bool(capabilities.get('canAddChildren')),
         'trashed': bool(data.get('trashed', False)),
     }
+
+
+def set_public_read(folder_id: str, token: str) -> dict[str, Any]:
+    """Set Google Drive folder/file to 'anyone with link can view'."""
+    resp = requests.post(
+        f"{DRIVE_API}/files/{quote(folder_id, safe='')}/permissions",
+        headers=_headers(token),
+        json={"role": "reader", "type": "anyone"},
+        params={"supportsAllDrives": "true"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def copy_file(
+    file_id: str,
+    dest_folder_id: str,
+    token: str,
+    new_name: str | None = None,
+) -> dict[str, Any]:
+    """Copy a file to a destination folder."""
+    body: dict[str, Any] = {"parents": [dest_folder_id]}
+    if new_name:
+        body["name"] = new_name
+    resp = requests.post(
+        f"{DRIVE_API}/files/{quote(file_id, safe='')}/copy",
+        headers=_headers(token),
+        json=body,
+        params={"supportsAllDrives": "true"},
+        timeout=60,
+    )
+    resp.raise_for_status()
+    return resp.json()

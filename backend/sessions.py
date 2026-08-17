@@ -35,9 +35,9 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         'editMode': row['edit_mode'],
         'editStrength': row['edit_strength'],
         'pollSeconds': row['poll_seconds'],
-        'galleryEnabled': bool(row['gallery_enabled']) if ('gallery_enabled' in row.keys() and row['gallery_enabled'] is not None) else True,
-        'favoritesFolderId': row['favorites_folder_id'] if 'favorites_folder_id' in row.keys() else None,
-        'favoritesFolderName': row['favorites_folder_name'] if 'favorites_folder_name' in row.keys() else None,
+        'galleryEnabled': bool(row['gallery_enabled']) if row['gallery_enabled'] is not None else True,
+        'favoritesFolderId': row['favorites_folder_id'],
+        'favoritesFolderName': row['favorites_folder_name'],
         'createdAt': row['created_at'],
         'updatedAt': row['updated_at'],
     }
