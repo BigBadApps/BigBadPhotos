@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import Icon from '../components/Icon'
 import * as sessionsClient from '../api/sessionsClient'
+import { copyText } from '../utils/clipboard'
 
 function formatDate(isoStr) {
   if (!isoStr) return ''
@@ -107,7 +108,7 @@ export default function FavoritesReviewView() {
 
   const handleCopyLink = useCallback((url) => {
     if (!url) return
-    navigator.clipboard.writeText(url).then(() => {
+    copyText(url).then(() => {
       setCopiedLink(true)
       setTimeout(() => setCopiedLink(false), 2000)
     }).catch(() => {})
