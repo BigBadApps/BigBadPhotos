@@ -831,16 +831,16 @@ def validate_gallery_token(token_value: str) -> dict | None:
 
 
 def _remove_gallery_drive_access(session_dict: dict) -> None:
-    export_folder = session_dict.get('exportFolderId') or session_dict.get('export_folder_id')
-    if not export_folder:
-        return
     token = _google_token()
     if not token:
         return
-    try:
-        google_drive.remove_public_read(export_folder, token)
-    except Exception:
-        pass
+    for key in ('exportFolderId', 'export_folder_id', 'favoritesFolderId', 'favorites_folder_id'):
+        folder = session_dict.get(key)
+        if folder:
+            try:
+                google_drive.remove_public_read(folder, token)
+            except Exception:
+                pass
 
 
 def get_or_create_visitor_id() -> str:
@@ -1152,7 +1152,7 @@ def gallery_api_photo_thumb(token, photo_id):
 
     return Response(body, mimetype=resolved_mime, headers={
         'Content-Disposition': f'inline; filename="{resolved_name}"',
-        'Cache-Control': 'public, max-age=86400',
+        'Cache-Control': 'private, max-age=3600',
     })
 
 
@@ -1188,7 +1188,7 @@ def gallery_api_photo_full(token, photo_id):
 
     return Response(body, mimetype=resolved_mime, headers={
         'Content-Disposition': f'inline; filename="{resolved_name}"',
-        'Cache-Control': 'public, max-age=3600',
+        'Cache-Control': 'private, max-age=1800',
     })
 
 
