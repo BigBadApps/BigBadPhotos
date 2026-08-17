@@ -26,6 +26,19 @@ export default function GalleryShell() {
   const [favorites, setFavorites] = useState(new Set());
   const [loadingFavorites, setLoadingFavorites] = useState(true);
 
+  // The main app locks html/body to a fixed 100dvh with overflow:hidden and
+  // scrolls internal panels instead (see index.css). The gallery is a plain
+  // scrolling document, so it needs that reset lifted while mounted — without
+  // this, iOS Safari has no scrollable element and the page is stuck in place.
+  useEffect(() => {
+    document.documentElement.classList.add('gallery-mode');
+    document.body.classList.add('gallery-mode');
+    return () => {
+      document.documentElement.classList.remove('gallery-mode');
+      document.body.classList.remove('gallery-mode');
+    };
+  }, []);
+
   // Fetch gallery metadata
   useEffect(() => {
     if (!token) {

@@ -5,6 +5,16 @@
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,600&display=swap');
 
+/* The main app pins html/body to a fixed viewport (see index.css) and scrolls
+   internal panels instead. The gallery is a normal scrolling document, so
+   GalleryShell toggles this class to lift that reset while it's mounted —
+   otherwise iOS Safari has no scrollable element and the page can't move. */
+html.gallery-mode,
+body.gallery-mode {
+  height: auto;
+  overflow: visible;
+}
+
 /* --- Root tokens and theme variables --- */
 [data-gallery] {
   --gallery-bg: #FAF7F2;              /* Warm cream */
