@@ -21,7 +21,7 @@ from backend import sessions
 from backend import gallery
 from backend.scoring import (
     decode_image, score_sharpness, score_exposure, score_noise,
-    score_contrast, score_faces, compute_phash, hamming_distance,
+    score_contrast, score_artifacts, score_faces, compute_phash, hamming_distance,
     score_composition, composite_score,
 )
 from backend import scoring
@@ -1304,6 +1304,7 @@ def analyze():
         exposure   = score_exposure(gray)
         noise      = score_noise(gray)
         contrast   = score_contrast(gray)
+        artifact   = score_artifacts(gray)
 
         return jsonify({
             "filename":        filename,
@@ -1311,6 +1312,7 @@ def analyze():
             "exposure":        exposure,
             "noise":           noise,
             "contrast":        contrast,
+            "artifact_score":  artifact,
             "model":           "multi-metric-v1",
         })
 

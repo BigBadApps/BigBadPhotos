@@ -12,20 +12,27 @@ export default function GalleryFavorites() {
   const [loadingPhotos, setLoadingPhotos] = useState(true);
   const [activePhotoId, setActivePhotoId] = useState(null);
 
-  // Load photos to filter by favorites
   useEffect(() => {
     if (!token) return;
 
     let isMounted = true;
     setLoadingPhotos(true);
 
-    galleryClient.fetchPhotos(token, { limit: 1000 })
-      .then((data) => {
+    (async () => {
+      const PAGE = 200;
+      let all = [];
+      let offset = 0;
+      let done = false;
+      while (!done) {
+        const batch = await galleryClient.fetchPhotos(token, { limit: PAGE, offset });
         if (!isMounted) return;
-        if (Array.isArray(data)) {
-          setAllPhotos(data);
-        }
-      })
+        if (!Array.isArray(batch) || batch.length === 0) { done = true; break; }
+        all = all.concat(batch);
+        if (batch.length < PAGE) { done = true; break; }
+        offset += PAGE;
+      }
+      if (isMounted) setAllPhotos(all);
+    })()
       .catch((err) => {
         console.error('Failed to load photos in favorites view:', err);
       })
@@ -38,7 +45,7 @@ export default function GalleryFavorites() {
     };
   }, [token]);
 
-  const favoritePhotos = allPhotos.filter((p) => favorites.has(p.id));
+  const favoritePhotos = allPhotos.filter((p) => favorites.has(Number(p.id)));
 
   const handleCardClick = useCallback((photo) => {
     setActivePhotoId(photo.id);

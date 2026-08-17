@@ -6,7 +6,7 @@ import DecisionBadge from '../components/DecisionBadge';
 
 /** 0–1 scores from /rank (nested objects use *_score keys). */
 function photoMetrics01(p) {
-  if (!p) return { sharp: null, expo: null, noise: null, comp: null };
+  if (!p) return { sharp: null, expo: null, noise: null, comp: null, artifact: null };
   const sharp = p.sharpness ?? null;
   const e = p.exposure;
   const expo = e?.exposure_score ?? e?.score ?? null;
@@ -14,7 +14,8 @@ function photoMetrics01(p) {
   const noise = n?.noise_score ?? n?.score ?? null;
   const c = p.composition;
   const comp = c?.composition_score ?? c?.score ?? null;
-  return { sharp, expo, noise, comp };
+  const artifact = p.artifact_score ?? p.artifactScore ?? (p.artifacts?.artifact_score ?? null);
+  return { sharp, expo, noise, comp, artifact };
 }
 
 /** `all` | `burst` (★ burst best) | `top20` (best 20% by AI rank). */
@@ -288,7 +289,7 @@ export default function CullingView({ feedbackIntensity = 'pronounced', showInli
     return null;
   }
 
-  const { sharp, expo, noise, comp } = photoMetrics01(photo);
+  const { sharp, expo, noise, comp, artifact } = photoMetrics01(photo);
   const overall = photo.overallScore ?? (
     [sharp, expo, noise, comp].every((v) => v != null) ? (sharp + expo + noise + comp) / 4 : null
   );
@@ -524,6 +525,7 @@ export default function CullingView({ feedbackIntensity = 'pronounced', showInli
               <ScoreBar value={expo  ?? 0}  label="Exposure"    />
               <ScoreBar value={noise ?? 0}  label="Noise"       />
               <ScoreBar value={comp  ?? 0}  label="Composition" />
+              {artifact != null && <ScoreBar value={artifact} label="Artifacts" />}
             </div>
             {overall == null && (
               <div className="fs-xxs dim mono upper" style={{ marginTop: 'var(--sp-3)', paddingTop: 'var(--sp-3)', borderTop: '1px dashed var(--line)' }}>

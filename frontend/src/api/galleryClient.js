@@ -1,13 +1,13 @@
-/**
- * Client API client for public / client-facing photo gallery endpoints.
- * All requests use cookie credentials (bbp_visitor) and URL token authentication.
- */
+import { getCsrfHeaders } from '../utils/csrf';
 
 async function galleryFetch(path, { method = 'GET', body } = {}) {
   const isMutating = method !== 'GET';
   const headers = {};
-  if (isMutating && body !== undefined) {
-    headers['Content-Type'] = 'application/json';
+  if (isMutating) {
+    Object.assign(headers, getCsrfHeaders());
+    if (body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+    }
   }
 
   const res = await fetch(path, {
