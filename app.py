@@ -1114,7 +1114,7 @@ def gallery_api_photo_thumb(token, photo_id):
         return jsonify({'error': 'not_found', 'detail': f'photo not found: {photo_id}'}), 404
 
     row = db.get().execute(
-        "SELECT photos.drive_file_id, photos.filename FROM photos "
+        "SELECT photos.drive_file_id, photos.exported_file_id, photos.filename FROM photos "
         "JOIN runs ON photos.run_id = runs.id "
         "WHERE photos.id = ? AND runs.session_id = ? AND photos.state IN ('exported', 'archived')",
         (photo_id, token_dict['session_id']),
@@ -1122,13 +1122,14 @@ def gallery_api_photo_thumb(token, photo_id):
     if row is None:
         return jsonify({'error': 'not_found', 'detail': f'photo not found: {photo_id}'}), 404
 
+    file_id = row['exported_file_id'] or row['drive_file_id']
     drive_token = _google_token()
     if not drive_token:
         return jsonify({'error': 'drive_error', 'detail': 'Drive not authorized on server'}), 502
 
     try:
         body, resolved_name, resolved_mime = google_drive.stream_file(
-            drive_token, row['drive_file_id'], filename=row['filename'])
+            drive_token, file_id, filename=row['filename'])
     except Exception as exc:
         return jsonify({'error': 'drive_error', 'detail': str(exc)}), 502
 
@@ -1149,7 +1150,7 @@ def gallery_api_photo_full(token, photo_id):
         return jsonify({'error': 'not_found', 'detail': f'photo not found: {photo_id}'}), 404
 
     row = db.get().execute(
-        "SELECT photos.drive_file_id, photos.filename FROM photos "
+        "SELECT photos.drive_file_id, photos.exported_file_id, photos.filename FROM photos "
         "JOIN runs ON photos.run_id = runs.id "
         "WHERE photos.id = ? AND runs.session_id = ? AND photos.state IN ('exported', 'archived')",
         (photo_id, token_dict['session_id']),
@@ -1157,13 +1158,14 @@ def gallery_api_photo_full(token, photo_id):
     if row is None:
         return jsonify({'error': 'not_found', 'detail': f'photo not found: {photo_id}'}), 404
 
+    file_id = row['exported_file_id'] or row['drive_file_id']
     drive_token = _google_token()
     if not drive_token:
         return jsonify({'error': 'drive_error', 'detail': 'Drive not authorized on server'}), 502
 
     try:
         body, resolved_name, resolved_mime = google_drive.stream_file(
-            drive_token, row['drive_file_id'], filename=row['filename'])
+            drive_token, file_id, filename=row['filename'])
     except Exception as exc:
         return jsonify({'error': 'drive_error', 'detail': str(exc)}), 502
 
@@ -1188,6 +1190,9 @@ def gallery_api_favorites_add(token, photo_id):
     token_dict = validate_gallery_token(token)
     if token_dict is None:
         return jsonify({'error': 'not_found', 'detail': 'gallery not found'}), 404
+    scope_ids = token_dict.get('photo_ids')
+    if token_dict.get('scope') == 'favorites' and scope_ids and photo_id not in scope_ids:
+        return jsonify({'error': 'not_found', 'detail': f'photo not found: {photo_id}'}), 404
     row = db.get().execute(
         "SELECT photos.id FROM photos JOIN runs ON photos.run_id = runs.id "
         "WHERE photos.id = ? AND runs.session_id = ? AND photos.state IN ('exported', 'archived')",
@@ -1244,6 +1249,9 @@ def gallery_api_comments_post(token):
             photo_id = int(photo_id)
         except (TypeError, ValueError):
             return jsonify({'error': 'bad_request', 'detail': 'invalid photo_id'}), 400
+        scope_ids = token_dict.get('photo_ids')
+        if token_dict.get('scope') == 'favorites' and scope_ids and photo_id not in scope_ids:
+            return jsonify({'error': 'not_found', 'detail': f'photo not found: {photo_id}'}), 404
         row = db.get().execute(
             "SELECT photos.id FROM photos JOIN runs ON photos.run_id = runs.id "
             "WHERE photos.id = ? AND runs.session_id = ? AND photos.state IN ('exported', 'archived')",

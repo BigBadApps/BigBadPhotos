@@ -424,7 +424,8 @@ class Pipeline:
         if not rows:
             return
         export_folder = self.session.get('exportFolderId')
-        if export_folder and not getattr(self, '_export_folder_public', False):
+        gallery_enabled = self.session.get('galleryEnabled', self.session.get('gallery_enabled', True))
+        if export_folder and gallery_enabled and not getattr(self, '_export_folder_public', False):
             try:
                 if hasattr(self._drive, 'set_public_read'):
                     self._drive.set_public_read(export_folder, token)
