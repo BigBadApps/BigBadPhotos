@@ -35,6 +35,9 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         'editMode': row['edit_mode'],
         'editStrength': row['edit_strength'],
         'pollSeconds': row['poll_seconds'],
+        'galleryEnabled': bool(row['gallery_enabled']) if ('gallery_enabled' in row.keys() and row['gallery_enabled'] is not None) else True,
+        'favoritesFolderId': row['favorites_folder_id'] if 'favorites_folder_id' in row.keys() else None,
+        'favoritesFolderName': row['favorites_folder_name'] if 'favorites_folder_name' in row.keys() else None,
         'createdAt': row['created_at'],
         'updatedAt': row['updated_at'],
     }
@@ -76,6 +79,19 @@ def _validate(merged: dict) -> dict:
     if edit_strength not in STRENGTHS:
         raise SessionError(f'editStrength must be one of {STRENGTHS}')
 
+    gallery_enabled = merged.get('galleryEnabled')
+    if gallery_enabled is None:
+        gallery_enabled = merged.get('gallery_enabled', True)
+    gallery_enabled = bool(gallery_enabled)
+
+    favorites_folder_id = merged.get('favoritesFolderId', merged.get('favorites_folder_id'))
+    if favorites_folder_id is not None:
+        favorites_folder_id = str(favorites_folder_id).strip() or None
+
+    favorites_folder_name = merged.get('favoritesFolderName', merged.get('favorites_folder_name'))
+    if favorites_folder_name is not None:
+        favorites_folder_name = str(favorites_folder_name).strip() or None
+
     return {
         'name': name,
         'sourceFolderId': source_folder_id,
@@ -90,6 +106,9 @@ def _validate(merged: dict) -> dict:
         'editMode': edit_mode,
         'editStrength': edit_strength,
         'pollSeconds': poll_seconds,
+        'galleryEnabled': gallery_enabled,
+        'favoritesFolderId': favorites_folder_id,
+        'favoritesFolderName': favorites_folder_name,
     }
 
 
@@ -102,8 +121,9 @@ def create(data: dict) -> dict:
             "INSERT INTO sessions (name, source_folder_id, source_folder_name,"
             " export_folder_id, export_folder_name, archive_folder_id,"
             " autonomous, preset, threshold, burst_best_only, edit_mode,"
-            " edit_strength, poll_seconds, created_at, updated_at) VALUES"
-            " (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " edit_strength, poll_seconds, gallery_enabled, favorites_folder_id,"
+            " favorites_folder_name, created_at, updated_at) VALUES"
+            " (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 validated['name'],
                 validated['sourceFolderId'],
@@ -118,6 +138,9 @@ def create(data: dict) -> dict:
                 validated['editMode'],
                 validated['editStrength'],
                 validated['pollSeconds'],
+                int(validated['galleryEnabled']),
+                validated['favoritesFolderId'],
+                validated['favoritesFolderName'],
                 now,
                 now,
             ),
@@ -125,7 +148,17 @@ def create(data: dict) -> dict:
         conn.commit()
     except sqlite3.IntegrityError as exc:
         raise SessionError(f'session name already exists: {validated["name"]}') from exc
-    return get(cur.lastrowid)
+
+    session_id = cur.lastrowid
+    from backend import gallery
+    token_obj = gallery.create_token(session_id)
+    session_dict = get(session_id)
+    if session_dict is not None and token_obj:
+        session_dict['gallery_token'] = token_obj['token']
+        session_dict['galleryToken'] = token_obj['token']
+        session_dict['gallery_url'] = f"/gallery/{token_obj['token']}"
+        session_dict['galleryUrl'] = f"/gallery/{token_obj['token']}"
+    return session_dict
 
 
 def get(session_id: int) -> dict | None:
@@ -168,7 +201,8 @@ def update(session_id: int, data: dict) -> dict:
             "UPDATE sessions SET name=?, source_folder_id=?, source_folder_name=?,"
             " export_folder_id=?, export_folder_name=?, archive_folder_id=?,"
             " autonomous=?, preset=?, threshold=?, burst_best_only=?,"
-            " edit_mode=?, edit_strength=?, poll_seconds=?, updated_at=?"
+            " edit_mode=?, edit_strength=?, poll_seconds=?, gallery_enabled=?,"
+            " favorites_folder_id=?, favorites_folder_name=?, updated_at=?"
             " WHERE id=?",
             (
                 validated['name'],
@@ -184,6 +218,9 @@ def update(session_id: int, data: dict) -> dict:
                 validated['editMode'],
                 validated['editStrength'],
                 validated['pollSeconds'],
+                int(validated['galleryEnabled']),
+                validated['favoritesFolderId'],
+                validated['favoritesFolderName'],
                 now,
                 session_id,
             ),

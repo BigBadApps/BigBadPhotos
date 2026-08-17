@@ -30,6 +30,11 @@ def test_create_applies_defaults():
     assert s['editMode'] == 'off'
     assert s['autonomous'] is False
     assert s['burstBestOnly'] is True
+    assert s['galleryEnabled'] is True
+    assert s['favoritesFolderId'] is None
+    assert s['favoritesFolderName'] is None
+    assert s['gallery_token'] is not None
+    assert s['gallery_url'] == f"/gallery/{s['gallery_token']}"
 
 
 def test_preset_sets_threshold():
@@ -66,10 +71,19 @@ def test_duplicate_name_rejected():
 
 def test_update_and_list_and_delete():
     s = sessions.create(_valid())
-    up = sessions.update(s['id'], {'threshold': 0.8, 'autonomous': True})
+    up = sessions.update(s['id'], {
+        'threshold': 0.8,
+        'autonomous': True,
+        'galleryEnabled': False,
+        'favoritesFolderId': 'fav-123',
+        'favoritesFolderName': 'Soccer - Favorites',
+    })
     assert up['threshold'] == pytest.approx(0.8)
     assert up['autonomous'] is True
     assert up['preset'] == 'custom'
+    assert up['galleryEnabled'] is False
+    assert up['favoritesFolderId'] == 'fav-123'
+    assert up['favoritesFolderName'] == 'Soccer - Favorites'
     assert len(sessions.list_all()) == 1
     sessions.delete(s['id'])
     assert sessions.get(s['id']) is None
@@ -81,3 +95,4 @@ def test_settings_roundtrip():
     assert sessions.get_setting('inbox_folder_id') == 'folder-123'
     sessions.set_setting('inbox_folder_id', 'folder-456')
     assert sessions.get_setting('inbox_folder_id') == 'folder-456'
+

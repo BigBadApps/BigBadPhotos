@@ -12,9 +12,17 @@ def test_migrate_creates_tables_and_sets_version():
         conn = db.connect(os.path.join(tmp, 'x.db'))
         version = db.migrate(conn)
         assert version == db.SCHEMA_VERSION
+        assert version == 3
         names = {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
-        assert {'sessions', 'runs', 'photos', 'run_errors', 'app_settings'} <= names
+        assert {
+            'sessions', 'runs', 'photos', 'run_errors', 'app_settings',
+            'gallery_tokens', 'gallery_favorites', 'gallery_comments'
+        } <= names
+
+        # Verify new sessions columns exist
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
+        assert {'gallery_enabled', 'favorites_folder_id', 'favorites_folder_name'} <= cols
 
 
 def test_migrate_is_idempotent():

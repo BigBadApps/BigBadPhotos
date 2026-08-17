@@ -10,7 +10,7 @@ import os
 import sqlite3
 import threading
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 DEFAULT_PATH = os.path.join(os.path.expanduser('~'), '.bigbadphotos', 'bbp.db')
 
@@ -97,6 +97,53 @@ ALTER TABLE photos ADD COLUMN sidecar_uploaded INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE photos ADD COLUMN uploaded_to_export INTEGER NOT NULL DEFAULT 0;
 """
 
+# v3: client-facing photo gallery tokens, visitor favorites, visitor comments,
+# and gallery config columns on sessions.
+SCHEMA_V3 = """
+CREATE TABLE IF NOT EXISTS gallery_tokens (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  token TEXT UNIQUE NOT NULL,
+  label TEXT DEFAULT 'Main Gallery',
+  scope TEXT DEFAULT 'exports',
+  expires_at TEXT,
+  revoked INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_gallery_tokens_session ON gallery_tokens(session_id);
+CREATE INDEX IF NOT EXISTS idx_gallery_tokens_token ON gallery_tokens(token);
+
+CREATE TABLE IF NOT EXISTS gallery_favorites (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_id INTEGER NOT NULL REFERENCES gallery_tokens(id) ON DELETE CASCADE,
+  photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
+  visitor_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(token_id, photo_id, visitor_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_gallery_favorites_token_photo ON gallery_favorites(token_id, photo_id);
+
+CREATE TABLE IF NOT EXISTS gallery_comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_id INTEGER NOT NULL REFERENCES gallery_tokens(id) ON DELETE CASCADE,
+  photo_id INTEGER REFERENCES photos(id) ON DELETE CASCADE,
+  visitor_id TEXT NOT NULL,
+  display_name TEXT,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_gallery_comments_token ON gallery_comments(token_id);
+CREATE INDEX IF NOT EXISTS idx_gallery_comments_photo ON gallery_comments(photo_id);
+
+ALTER TABLE sessions ADD COLUMN gallery_enabled INTEGER DEFAULT 1;
+ALTER TABLE sessions ADD COLUMN favorites_folder_id TEXT;
+ALTER TABLE sessions ADD COLUMN favorites_folder_name TEXT;
+"""
+
 
 def connect(path: str | None = None) -> sqlite3.Connection:
     path = path or _configured_path or DEFAULT_PATH
@@ -121,6 +168,11 @@ def migrate(conn: sqlite3.Connection) -> int:
         conn.execute('PRAGMA user_version=2')
         conn.commit()
         current = 2
+    if current < 3:
+        conn.executescript(SCHEMA_V3)
+        conn.execute('PRAGMA user_version=3')
+        conn.commit()
+        current = 3
     return conn.execute('PRAGMA user_version').fetchone()[0]
 
 
