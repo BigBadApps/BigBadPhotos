@@ -563,10 +563,13 @@ def sessions_update(session_id):
             return jsonify({'error': 'run_in_progress',
                             'detail': 'stop the active run before changing '
                                       'this session\'s folders'}), 409
+    was_gallery_enabled = s.get('galleryEnabled', True)
     try:
         updated = sessions.update(session_id, data)
     except sessions.SessionError as e:
         return jsonify({'error': 'bad_config', 'detail': str(e)}), 400
+    if was_gallery_enabled and not updated.get('galleryEnabled', True):
+        _remove_gallery_drive_access(updated)
     return jsonify({'ok': True, 'session': updated})
 
 
@@ -827,6 +830,19 @@ def validate_gallery_token(token_value: str) -> dict | None:
     return token_dict
 
 
+def _remove_gallery_drive_access(session_dict: dict) -> None:
+    export_folder = session_dict.get('exportFolderId') or session_dict.get('export_folder_id')
+    if not export_folder:
+        return
+    token = _google_token()
+    if not token:
+        return
+    try:
+        google_drive.remove_public_read(export_folder, token)
+    except Exception:
+        pass
+
+
 def get_or_create_visitor_id() -> str:
     visitor_id = request.cookies.get('bbp_visitor')
     if visitor_id:
@@ -972,6 +988,7 @@ def session_gallery_revoke(session_id):
         return jsonify({'error': 'not_found',
                         'detail': f'session not found: {session_id}'}), 404
     gallery.revoke_tokens_for_session(session_id)
+    _remove_gallery_drive_access(s)
     return jsonify({'ok': True})
 
 

@@ -412,6 +412,28 @@ def set_public_read(folder_id: str, token: str) -> dict[str, Any]:
     return resp.json()
 
 
+def remove_public_read(folder_id: str, token: str) -> bool:
+    """Remove the 'anyone' reader permission from a Drive folder/file, if present."""
+    resp = requests.get(
+        f"{DRIVE_API}/files/{quote(folder_id, safe='')}/permissions",
+        headers=_headers(token),
+        params={"supportsAllDrives": "true", "fields": "permissions(id,type,role)"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    for perm in resp.json().get('permissions', []):
+        if perm.get('type') == 'anyone':
+            del_resp = requests.delete(
+                f"{DRIVE_API}/files/{quote(folder_id, safe='')}/permissions/{perm['id']}",
+                headers=_headers(token),
+                params={"supportsAllDrives": "true"},
+                timeout=30,
+            )
+            del_resp.raise_for_status()
+            return True
+    return False
+
+
 def copy_file(
     file_id: str,
     dest_folder_id: str,
