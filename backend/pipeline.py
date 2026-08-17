@@ -138,6 +138,7 @@ class Pipeline:
 
         root = os.environ.get('BBP_STAGING_ROOT') or DEFAULT_STAGING
         self._staging = os.path.join(root, str(run_id))
+        self._export_folder_public = False
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -419,7 +420,25 @@ class Pipeline:
     def _export(self, token: str) -> None:
         if self._auth_error:
             return
-        for row in self._select_rows('exporting'):
+        rows = self._select_rows('exporting')
+        if not rows:
+            return
+        export_folder = self.session.get('exportFolderId')
+        if export_folder and not getattr(self, '_export_folder_public', False):
+            try:
+                if hasattr(self._drive, 'set_public_read'):
+                    self._drive.set_public_read(export_folder, token)
+                elif hasattr(google_drive, 'set_public_read'):
+                    google_drive.set_public_read(export_folder, token)
+                self._export_folder_public = True
+            except Exception as exc:
+                if _is_auth_error(exc):
+                    self._trigger_auth_error(exc)
+                    return
+                # Non-fatal if drive permissions fail
+                self._export_folder_public = True
+
+        for row in rows:
             if self._auth_error:
                 return
             try:

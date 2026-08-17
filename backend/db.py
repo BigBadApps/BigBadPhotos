@@ -10,7 +10,7 @@ import os
 import sqlite3
 import threading
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 DEFAULT_PATH = os.path.join(os.path.expanduser('~'), '.bigbadphotos', 'bbp.db')
 
@@ -144,6 +144,10 @@ ALTER TABLE sessions ADD COLUMN favorites_folder_id TEXT;
 ALTER TABLE sessions ADD COLUMN favorites_folder_name TEXT;
 """
 
+SCHEMA_V4 = """
+ALTER TABLE gallery_tokens ADD COLUMN photo_ids_json TEXT;
+"""
+
 
 def connect(path: str | None = None) -> sqlite3.Connection:
     path = path or _configured_path or DEFAULT_PATH
@@ -173,6 +177,11 @@ def migrate(conn: sqlite3.Connection) -> int:
         conn.execute('PRAGMA user_version=3')
         conn.commit()
         current = 3
+    if current < 4:
+        conn.executescript(SCHEMA_V4)
+        conn.execute('PRAGMA user_version=4')
+        conn.commit()
+        current = 4
     return conn.execute('PRAGMA user_version').fetchone()[0]
 
 

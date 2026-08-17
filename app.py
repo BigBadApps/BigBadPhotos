@@ -819,7 +819,10 @@ def validate_gallery_token(token_value: str) -> dict | None:
     if not token_value:
         return None
     token_dict = gallery.get_token_by_value(token_value)
-    if not token_dict or token_dict.get('revoked'):
+    if not token_dict:
+        return None
+    s = sessions.get(token_dict['sessionId'])
+    if not s or not s.get('galleryEnabled', True):
         return None
     return token_dict
 
@@ -908,6 +911,8 @@ def session_gallery_approve_favorites(session_id):
                         'detail': f'Failed to create favorites folder: {exc}'}), 502
 
     conn = db.get()
+    copied_ids: list[int] = []
+    errors: list[dict] = []
     for pid in photo_ids:
         row = conn.execute(
             "SELECT photos.id, photos.exported_file_id, photos.drive_file_id, photos.filename "
@@ -922,9 +927,17 @@ def session_gallery_approve_favorites(session_id):
             continue
         try:
             google_drive.copy_file(file_to_copy, fav_folder['id'], drive_token)
+            copied_ids.append(int(row['id']))
         except Exception as exc:
-            return jsonify({'error': 'drive_error',
-                            'detail': f'Failed to copy file {row["filename"]}: {exc}'}), 502
+            errors.append({'photo_id': int(row['id']), 'filename': row['filename'], 'error': str(exc)})
+
+    if not copied_ids and errors:
+        return jsonify({'error': 'drive_error',
+                        'detail': 'All file copies failed', 'errors': errors}), 502
+
+    if not copied_ids and not errors:
+        return jsonify({'error': 'bad_request',
+                        'detail': 'No valid photos found to approve'}), 400
 
     sessions.update(session_id, {
         'favoritesFolderId': fav_folder['id'],
@@ -935,16 +948,21 @@ def session_gallery_approve_favorites(session_id):
         session_id,
         label=f"{session_name} - Favorites",
         scope='favorites',
+        photo_ids=copied_ids,
     )
 
-    return jsonify({
+    result: dict = {
         'favorites_folder_id': fav_folder['id'],
         'favoritesFolderId': fav_folder['id'],
         'favorites_token': fav_token['token'],
         'favoritesToken': fav_token['token'],
         'favorites_url': f"/gallery/{fav_token['token']}",
         'favoritesUrl': f"/gallery/{fav_token['token']}",
-    })
+        'copied_count': len(copied_ids),
+    }
+    if errors:
+        result['errors'] = errors
+    return jsonify(result), 201 if not errors else 207
 
 
 @app.post('/sessions/<int:session_id>/gallery/revoke')
@@ -1039,44 +1057,43 @@ def gallery_api_photos(token):
             after_id = None
 
     conn = db.get()
+    scope_photo_ids = token_dict.get('photo_ids')
+    scope_filter = ""
+    base_params: list = [token_dict['session_id']]
+    if token_dict.get('scope') == 'favorites' and scope_photo_ids:
+        placeholders = ','.join('?' for _ in scope_photo_ids)
+        scope_filter = f" AND photos.id IN ({placeholders})"
+        base_params.extend(scope_photo_ids)
+
     count_row = conn.execute(
         "SELECT COUNT(*) FROM photos JOIN runs ON photos.run_id = runs.id "
-        "WHERE runs.session_id = ? AND photos.state IN ('exported', 'archived')",
-        (token_dict['session_id'],),
+        "WHERE runs.session_id = ? AND photos.state IN ('exported', 'archived')" + scope_filter,
+        base_params,
     ).fetchone()
     total_count = count_row[0] if count_row else 0
 
     if after_id is not None:
         rows = conn.execute(
             "SELECT photos.* FROM photos JOIN runs ON photos.run_id = runs.id "
-            "WHERE runs.session_id = ? AND photos.state IN ('exported', 'archived') AND photos.id > ? "
-            "ORDER BY photos.id ASC LIMIT ? OFFSET ?",
-            (token_dict['session_id'], after_id, limit, offset),
+            "WHERE runs.session_id = ? AND photos.state IN ('exported', 'archived')" + scope_filter +
+            " AND photos.id > ? ORDER BY photos.id ASC LIMIT ?",
+            base_params + [after_id, limit],
         ).fetchall()
     else:
         rows = conn.execute(
             "SELECT photos.* FROM photos JOIN runs ON photos.run_id = runs.id "
-            "WHERE runs.session_id = ? AND photos.state IN ('exported', 'archived') "
-            "ORDER BY photos.id ASC LIMIT ? OFFSET ?",
-            (token_dict['session_id'], limit, offset),
+            "WHERE runs.session_id = ? AND photos.state IN ('exported', 'archived')" + scope_filter +
+            " ORDER BY photos.id ASC LIMIT ? OFFSET ?",
+            base_params + [limit, offset],
         ).fetchall()
 
     photos_list = []
     for p in rows:
-        metrics = None
-        if p['metrics_json']:
-            try:
-                metrics = json.loads(p['metrics_json'])
-            except Exception:
-                metrics = None
         photos_list.append({
             'id': p['id'],
             'filename': p['filename'],
             'thumbnail_url': f"/gallery/api/{token}/photos/{p['id']}/thumb",
             'thumbnailUrl': f"/gallery/api/{token}/photos/{p['id']}/thumb",
-            'overall_score': p['overall_score'],
-            'overallScore': p['overall_score'],
-            'metrics': metrics,
             'created_at': p['claimed_at'],
             'createdAt': p['claimed_at'],
         })
@@ -1091,6 +1108,10 @@ def gallery_api_photo_thumb(token, photo_id):
     token_dict = validate_gallery_token(token)
     if token_dict is None:
         return jsonify({'error': 'not_found', 'detail': 'gallery not found'}), 404
+
+    scope_ids = token_dict.get('photo_ids')
+    if token_dict.get('scope') == 'favorites' and scope_ids and photo_id not in scope_ids:
+        return jsonify({'error': 'not_found', 'detail': f'photo not found: {photo_id}'}), 404
 
     row = db.get().execute(
         "SELECT photos.drive_file_id, photos.filename FROM photos "
@@ -1122,6 +1143,10 @@ def gallery_api_photo_full(token, photo_id):
     token_dict = validate_gallery_token(token)
     if token_dict is None:
         return jsonify({'error': 'not_found', 'detail': 'gallery not found'}), 404
+
+    scope_ids = token_dict.get('photo_ids')
+    if token_dict.get('scope') == 'favorites' and scope_ids and photo_id not in scope_ids:
+        return jsonify({'error': 'not_found', 'detail': f'photo not found: {photo_id}'}), 404
 
     row = db.get().execute(
         "SELECT photos.drive_file_id, photos.filename FROM photos "

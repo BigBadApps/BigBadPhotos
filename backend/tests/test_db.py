@@ -12,7 +12,7 @@ def test_migrate_creates_tables_and_sets_version():
         conn = db.connect(os.path.join(tmp, 'x.db'))
         version = db.migrate(conn)
         assert version == db.SCHEMA_VERSION
-        assert version == 3
+        assert version == 4
         names = {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
         assert {

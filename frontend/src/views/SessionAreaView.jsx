@@ -112,6 +112,16 @@ export default function SessionAreaView() {
   const [loadingRuns, setLoadingRuns] = useState(true)
   const [runsError, setRunsError] = useState(null)
 
+  // Gallery state
+  const [galleryInfo, setGalleryInfo] = useState(null)
+  const [loadingGallery, setLoadingGallery] = useState(true)
+  const [galleryError, setGalleryError] = useState(null)
+  const [copiedLink, setCopiedLink] = useState(false)
+  const [galleryActionBusy, setGalleryActionBusy] = useState(false)
+  const [confirmRevoke, setConfirmRevoke] = useState(false)
+  const [confirmRegen, setConfirmRegen] = useState(false)
+  const [togglingGallery, setTogglingGallery] = useState(false)
+
   const [checks, setChecks] = useState(null)
   const [preflightBusy, setPreflightBusy] = useState(false)
   const [preflightError, setPreflightError] = useState(null)
@@ -153,10 +163,31 @@ export default function SessionAreaView() {
     }
   }, [sessionId])
 
+  const fetchGallery = useCallback(async (isPolling = false) => {
+    if (!sessionId) return
+    if (!isPolling) setLoadingGallery(true)
+    try {
+      const data = await sessionsClient.fetchGalleryInfo(sessionId)
+      setGalleryInfo(data)
+      setGalleryError(null)
+    } catch (err) {
+      if (!isPolling) {
+        setGalleryError(err.message || 'Failed to load gallery info')
+      }
+    } finally {
+      if (!isPolling) setLoadingGallery(false)
+    }
+  }, [sessionId])
+
   useEffect(() => {
     fetchSession()
     fetchRuns()
-  }, [fetchSession, fetchRuns])
+    fetchGallery(false)
+    const interval = setInterval(() => {
+      fetchGallery(true)
+    }, 15000)
+    return () => clearInterval(interval)
+  }, [fetchSession, fetchRuns, fetchGallery])
 
   const handleAutonomousToggle = useCallback(async (nextVal) => {
     if (!session || togglingAutonomous) return
@@ -216,6 +247,63 @@ export default function SessionAreaView() {
       setActionError(err.message || 'Failed to stop run')
     }
   }, [stop, fetchRuns])
+
+  const handleCopyLink = useCallback((url) => {
+    if (!url) return
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedLink(true)
+      setTimeout(() => setCopiedLink(false), 2000)
+    }).catch(() => {})
+  }, [])
+
+  const handleGalleryToggle = useCallback(async (nextVal) => {
+    if (!session || togglingGallery) return
+    setTogglingGallery(true)
+    setActionError(null)
+    const prevVal = session.galleryEnabled ?? session.gallery_enabled ?? true
+    setSession((prev) => ({ ...prev, galleryEnabled: nextVal, gallery_enabled: nextVal }))
+    try {
+      const res = await sessionsClient.updateSession(sessionId, { galleryEnabled: nextVal })
+      if (res.session) setSession(res.session)
+      await fetchGallery(false)
+    } catch (err) {
+      setSession((prev) => ({ ...prev, galleryEnabled: prevVal, gallery_enabled: prevVal }))
+      setActionError(`Failed to update gallery status: ${err.message}`)
+    } finally {
+      setTogglingGallery(false)
+    }
+  }, [session, togglingGallery, sessionId, fetchGallery])
+
+  const handleRevoke = useCallback(async () => {
+    if (galleryActionBusy) return
+    setGalleryActionBusy(true)
+    setActionError(null)
+    try {
+      await sessionsClient.revokeGallery(sessionId)
+      setConfirmRevoke(false)
+      await fetchGallery(false)
+    } catch (err) {
+      setActionError(`Failed to revoke gallery link: ${err.message}`)
+    } finally {
+      setGalleryActionBusy(false)
+    }
+  }, [galleryActionBusy, sessionId, fetchGallery])
+
+  const handleRegenerate = useCallback(async () => {
+    if (galleryActionBusy) return
+    setGalleryActionBusy(true)
+    setActionError(null)
+    try {
+      await sessionsClient.regenerateGallery(sessionId)
+      setConfirmRegen(false)
+      await fetchGallery(false)
+    } catch (err) {
+      setActionError(`Failed to regenerate gallery link: ${err.message}`)
+    } finally {
+      setGalleryActionBusy(false)
+    }
+  }, [galleryActionBusy, sessionId, fetchGallery])
+
 
   // Edit form handlers
   const openEdit = useCallback(() => {
@@ -621,7 +709,278 @@ export default function SessionAreaView() {
         )}
       </div>
 
-      {/* 4. Run history section */}
+      {/* 4. Client Gallery card */}
+      <div className="card" style={{ marginBottom: 'var(--sp-6)', padding: 'var(--sp-5)' }}>
+        <div className="flex jcsb aic" style={{ marginBottom: 'var(--sp-4)' }}>
+          <div className="meta" style={{ color: 'var(--accent)' }}>Client Gallery</div>
+          <div className="flex aic" style={{ gap: 8 }}>
+            <span className="fs-xs dim">Enabled</span>
+            <OblToggle
+              checked={Boolean(session?.galleryEnabled ?? session?.gallery_enabled ?? true)}
+              disabled={togglingGallery}
+              onChange={handleGalleryToggle}
+            />
+          </div>
+        </div>
+
+        {galleryError && (
+          <div style={{
+            marginBottom: 'var(--sp-4)',
+            background: 'color-mix(in oklab, var(--reject) 10%, transparent)',
+            border: '1px solid color-mix(in oklab, var(--reject) 30%, transparent)',
+            borderRadius: 8,
+            padding: 'var(--sp-3)',
+          }}>
+            <p className="fs-sm" style={{ color: 'var(--reject)', margin: 0 }}>{galleryError}</p>
+          </div>
+        )}
+
+        {!(session?.galleryEnabled ?? session?.gallery_enabled ?? true) ? (
+          <div style={{
+            padding: 'var(--sp-4)',
+            borderRadius: 8,
+            background: 'var(--bg-3)',
+            border: '1px solid var(--line)',
+            textAlign: 'center',
+          }}>
+            <p className="fs-sm" style={{ color: 'var(--fg-3)', margin: 0 }}>
+              Client gallery is currently disabled for this session. Enable it above to share photos and collect client favorites.
+            </p>
+          </div>
+        ) : (
+          <>
+            {/* Live Stats */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+              gap: 'var(--sp-3)',
+              marginBottom: 'var(--sp-4)',
+            }}>
+              <div style={{
+                padding: 'var(--sp-3)',
+                background: 'var(--bg-3)',
+                borderRadius: 8,
+                border: '1px solid var(--line)',
+              }}>
+                <div className="meta" style={{ marginBottom: 4 }}>Favorites</div>
+                <div className="fs-xl mono" style={{ fontWeight: 700, color: 'var(--keep)' }}>
+                  {galleryInfo?.stats?.favoritesCount ?? galleryInfo?.stats?.favorites_count ?? 0}
+                </div>
+              </div>
+              <div style={{
+                padding: 'var(--sp-3)',
+                background: 'var(--bg-3)',
+                borderRadius: 8,
+                border: '1px solid var(--line)',
+              }}>
+                <div className="meta" style={{ marginBottom: 4 }}>Comments</div>
+                <div className="fs-xl mono" style={{ fontWeight: 700, color: 'var(--accent)' }}>
+                  {galleryInfo?.stats?.commentsCount ?? galleryInfo?.stats?.comments_count ?? 0}
+                </div>
+              </div>
+              <div style={{
+                padding: 'var(--sp-3)',
+                background: 'var(--bg-3)',
+                borderRadius: 8,
+                border: '1px solid var(--line)',
+              }}>
+                <div className="meta" style={{ marginBottom: 4 }}>Unique Visitors</div>
+                <div className="fs-xl mono" style={{ fontWeight: 700, color: 'var(--fg)' }}>
+                  {galleryInfo?.stats?.uniqueVisitors ?? galleryInfo?.stats?.unique_visitors ?? 0}
+                </div>
+              </div>
+            </div>
+
+            {/* Gallery URL Link Bar */}
+            {galleryInfo?.token ? (
+              <div style={{ marginBottom: 'var(--sp-4)' }}>
+                <FieldLabel>Gallery Share Link</FieldLabel>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  background: 'var(--bg-3)',
+                  border: '1px solid var(--line)',
+                  borderRadius: 8,
+                  padding: '6px 8px 6px 12px',
+                }}>
+                  <span className="mono fs-xs" style={{
+                    flex: 1,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    color: 'var(--fg-2)',
+                  }}>
+                    {`${window.location.origin}/gallery/${galleryInfo.token}`}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => handleCopyLink(`${window.location.origin}/gallery/${galleryInfo.token}`)}
+                    style={{ height: 34, padding: '0 10px', gap: 6, flexShrink: 0 }}
+                  >
+                    <Icon name={copiedLink ? 'check' : 'sparkle'} size={14} style={{ color: copiedLink ? 'var(--keep)' : undefined }} />
+                    <span className="fs-xs">{copiedLink ? 'Copied!' : 'Copy Link'}</span>
+                  </button>
+                  <a
+                    href={`/gallery/${galleryInfo.token}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn btn-ghost"
+                    style={{ height: 34, padding: '0 10px', gap: 6, flexShrink: 0, textDecoration: 'none' }}
+                  >
+                    <Icon name="arrowR" size={14} />
+                    <span className="fs-xs">View</span>
+                  </a>
+                </div>
+              </div>
+            ) : (
+              <div style={{
+                padding: 'var(--sp-3)',
+                marginBottom: 'var(--sp-4)',
+                background: 'var(--bg-3)',
+                borderRadius: 8,
+                border: '1px solid var(--line)',
+                color: 'var(--fg-3)',
+                fontSize: 'var(--fs-sm)',
+              }}>
+                No active gallery link. Click Regenerate below to create one.
+              </div>
+            )}
+
+            {/* Primary & Secondary Action Buttons */}
+            <div className="flex jcsb aic" style={{ gap: 'var(--sp-3)', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => navigate(`/sessions/${sessionId}/favorites`)}
+                style={{ height: 40, padding: '0 16px', gap: 8, fontSize: 'var(--fs-xs)' }}
+              >
+                <Icon name="sparkle" size={15} />
+                <span>Review Favorites</span>
+              </button>
+
+              <div className="flex aic" style={{ gap: 8 }}>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => setConfirmRegen(true)}
+                  disabled={galleryActionBusy}
+                  style={{ height: 36, padding: '0 12px', fontSize: 'var(--fs-xs)' }}
+                >
+                  Regenerate Link
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => setConfirmRevoke(true)}
+                  disabled={galleryActionBusy || !galleryInfo?.token}
+                  style={{
+                    height: 36,
+                    padding: '0 12px',
+                    fontSize: 'var(--fs-xs)',
+                    color: 'var(--reject)',
+                  }}
+                >
+                  Revoke Link
+                </button>
+              </div>
+            </div>
+
+            {/* Revoke Confirmation Dialog */}
+            {confirmRevoke && (
+              <div style={{
+                marginTop: 'var(--sp-4)',
+                padding: 'var(--sp-4)',
+                background: 'color-mix(in oklab, var(--reject) 8%, var(--bg-3))',
+                border: '1px solid color-mix(in oklab, var(--reject) 30%, var(--line))',
+                borderRadius: 8,
+              }}>
+                <div className="fs-sm" style={{ fontWeight: 600, color: 'var(--reject)', marginBottom: 4 }}>
+                  Revoke gallery link?
+                </div>
+                <p className="fs-xs" style={{ color: 'var(--fg-2)', margin: '0 0 var(--sp-3)' }}>
+                  Anyone with the current link will lose access immediately.
+                </p>
+                <div className="flex" style={{ gap: 8 }}>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={handleRevoke}
+                    disabled={galleryActionBusy}
+                    style={{
+                      background: 'var(--reject)',
+                      color: '#000',
+                      fontWeight: 600,
+                      height: 32,
+                      padding: '0 12px',
+                      fontSize: 'var(--fs-xs)',
+                    }}
+                  >
+                    {galleryActionBusy ? 'Revoking…' : 'Yes, Revoke'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => setConfirmRevoke(false)}
+                    disabled={galleryActionBusy}
+                    style={{ height: 32, padding: '0 12px', fontSize: 'var(--fs-xs)' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Regenerate Confirmation Dialog */}
+            {confirmRegen && (
+              <div style={{
+                marginTop: 'var(--sp-4)',
+                padding: 'var(--sp-4)',
+                background: 'color-mix(in oklab, var(--warning) 8%, var(--bg-3))',
+                border: '1px solid color-mix(in oklab, var(--warning) 30%, var(--line))',
+                borderRadius: 8,
+              }}>
+                <div className="fs-sm" style={{ fontWeight: 600, color: 'var(--warning)', marginBottom: 4 }}>
+                  Regenerate gallery link?
+                </div>
+                <p className="fs-xs" style={{ color: 'var(--fg-2)', margin: '0 0 var(--sp-3)' }}>
+                  A new gallery URL will be created. The previous link will immediately stop working.
+                </p>
+                <div className="flex" style={{ gap: 8 }}>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={handleRegenerate}
+                    disabled={galleryActionBusy}
+                    style={{
+                      background: 'var(--warning)',
+                      color: '#000',
+                      fontWeight: 600,
+                      height: 32,
+                      padding: '0 12px',
+                      fontSize: 'var(--fs-xs)',
+                    }}
+                  >
+                    {galleryActionBusy ? 'Regenerating…' : 'Yes, Regenerate'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => setConfirmRegen(false)}
+                    disabled={galleryActionBusy}
+                    style={{ height: 32, padding: '0 12px', fontSize: 'var(--fs-xs)' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* 5. Run history section */}
       <div>
         <div className="flex jcsb aic" style={{ marginBottom: 'var(--sp-4)' }}>
           <h2 style={{

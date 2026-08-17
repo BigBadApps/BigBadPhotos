@@ -13,6 +13,10 @@ import EditView from './views/EditView';
 import ReviewExportView from './views/ReviewExportView';
 import RunView from './views/RunView';
 import ReviewQueueView from './views/ReviewQueueView';
+import FavoritesReviewView from './views/FavoritesReviewView';
+import GalleryShell from './views/Gallery/GalleryShell';
+import GalleryGrid from './views/Gallery/GalleryGrid';
+import GalleryFavorites from './views/Gallery/GalleryFavorites';
 import { usePhotoLoader } from './hooks/usePhotoLoader';
 import { usePhotoRanker } from './hooks/usePhotoRanker';
 import { useSessionPersistence } from './hooks/useSessionPersistence';
@@ -466,6 +470,7 @@ function AppContent() {
           <Route path="/review"  element={hasPhotos ? <ReviewExportView /> : <Navigate to="/" />} />
           <Route path="/sessions" element={<Navigate to="/" replace />} />
           <Route path="/sessions/:sessionId" element={<SessionAreaView />} />
+          <Route path="/sessions/:sessionId/favorites" element={<FavoritesReviewView />} />
           <Route path="/sessions/:sessionId/run/:runId" element={<RunView />} />
           <Route path="/review-queue" element={<ReviewQueueView />} />
         </Routes>
@@ -552,10 +557,22 @@ export default function App() {
   }, []);
 
   return (
-    <GoogleGate>
-      <Router>
-        <AppContent />
-      </Router>
-    </GoogleGate>
+    <Router>
+      <Routes>
+        <Route path="/gallery/:token" element={<GalleryShell />}>
+          <Route index element={<GalleryGrid />} />
+          <Route path="favorites" element={<GalleryFavorites />} />
+          <Route path="photo/:photoId" element={<GalleryGrid />} />
+        </Route>
+        <Route
+          path="/*"
+          element={
+            <GoogleGate>
+              <AppContent />
+            </GoogleGate>
+          }
+        />
+      </Routes>
+    </Router>
   );
 }

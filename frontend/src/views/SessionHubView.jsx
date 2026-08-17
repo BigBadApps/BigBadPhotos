@@ -87,6 +87,23 @@ export default function SessionHubView() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(null)
   const [pickerTarget, setPickerTarget] = useState(null)
+  const [createdSession, setCreatedSession] = useState(null)
+  const [copiedLink, setCopiedLink] = useState(false)
+
+  const createdGalleryUrl = useMemo(() => {
+    if (!createdSession) return ''
+    const galToken = createdSession.gallery_token || createdSession.galleryToken
+    const rawUrl = createdSession.gallery_url || createdSession.galleryUrl || (galToken ? `/gallery/${galToken}` : '')
+    return galToken ? `${window.location.origin}/gallery/${galToken}` : (rawUrl.startsWith('http') ? rawUrl : `${window.location.origin}${rawUrl}`)
+  }, [createdSession])
+
+  const handleCopyLink = useCallback((url) => {
+    if (!url) return
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedLink(true)
+      setTimeout(() => setCopiedLink(false), 2000)
+    }).catch(() => {})
+  }, [])
 
   const refreshSessions = useCallback(async () => {
     setLoading(true)
@@ -199,19 +216,21 @@ export default function SessionHubView() {
     }
     try {
       const res = await sessionsClient.createSession(payload)
-      const newId = res.session?.id || res.id
-      if (newId) {
-        navigate(`/sessions/${newId}`)
-      } else {
-        await refreshSessions()
-        closeForm()
+      const created = res.session || res
+      await refreshSessions()
+      setFormOpen(false)
+      setForm(null)
+      if (created && (created.gallery_token || created.galleryToken || created.gallery_url || created.galleryUrl)) {
+        setCreatedSession(created)
+      } else if (created?.id) {
+        navigate(`/sessions/${created.id}`)
       }
     } catch (err) {
       setSaveError(err.message || 'Failed to create session')
     } finally {
       setSaving(false)
     }
-  }, [form, saving, navigate, refreshSessions, closeForm])
+  }, [form, saving, navigate, refreshSessions])
 
   const sessionSummary = useMemo(() => {
     const summaries = {}
@@ -532,6 +551,110 @@ export default function SessionHubView() {
         onClose={() => setPickerTarget(null)}
         onSelect={handlePickFolder}
       />
+
+      {/* Session Created & Gallery Link Modal */}
+      {createdSession && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 80,
+          background: 'rgba(0, 0, 0, 0.7)',
+          backdropFilter: 'blur(8px)',
+          display: 'grid',
+          placeItems: 'center',
+          padding: 'var(--sp-5)',
+        }}>
+          <div className="card" style={{
+            width: 'min(520px, 100%)',
+            padding: 'var(--sp-6)',
+            background: 'var(--bg-2)',
+            border: '1px solid var(--line)',
+            borderRadius: 12,
+            boxShadow: 'var(--shadow-2)',
+          }}>
+            <div className="flex jcsb aic" style={{ marginBottom: 'var(--sp-3)' }}>
+              <span className="meta" style={{ color: 'var(--keep)' }}>✓ Session Created</span>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => {
+                  const id = createdSession.id
+                  setCreatedSession(null)
+                  navigate(`/sessions/${id}`)
+                }}
+                aria-label="Close"
+              >
+                <Icon name="x" size={18} />
+              </button>
+            </div>
+
+            <h2 style={{
+              margin: '0 0 var(--sp-2)',
+              fontSize: 'var(--fs-xl)',
+              fontWeight: 700,
+              letterSpacing: 'var(--tracking-tight)',
+            }}>
+              {createdSession.name || 'New Session'}
+            </h2>
+
+            <p className="fs-sm" style={{ color: 'var(--fg-2)', margin: '0 0 var(--sp-5)', lineHeight: 1.5 }}>
+              Your session is ready with an active client gallery link. Share this link with your client so they can view exported photos and select their favorites.
+            </p>
+
+            <div style={{ marginBottom: 'var(--sp-5)' }}>
+              <FieldLabel>Client Gallery Link</FieldLabel>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                background: 'var(--bg-3)',
+                border: '1px solid var(--line)',
+                borderRadius: 8,
+                padding: '8px 10px 8px 12px',
+                marginBottom: 8,
+              }}>
+                <span className="mono fs-xs" style={{
+                  flex: 1,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  color: 'var(--fg)',
+                }}>
+                  {createdGalleryUrl}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => handleCopyLink(createdGalleryUrl)}
+                  style={{ height: 34, padding: '0 10px', gap: 6, flexShrink: 0 }}
+                >
+                  <Icon name={copiedLink ? 'check' : 'sparkle'} size={14} style={{ color: copiedLink ? 'var(--keep)' : undefined }} />
+                  <span className="fs-xs">{copiedLink ? 'Copied!' : 'Copy Link'}</span>
+                </button>
+              </div>
+              <p className="fs-xxs dim mono upper" style={{ margin: 0 }}>
+                Share this link with your client
+              </p>
+            </div>
+
+            <div className="flex" style={{ gap: 'var(--sp-3)', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn btn-primary btn-uppercase"
+                style={{ width: '100%', height: 44, fontSize: 'var(--fs-sm)' }}
+                onClick={() => {
+                  const id = createdSession.id
+                  setCreatedSession(null)
+                  navigate(`/sessions/${id}`)
+                }}
+              >
+                Go to Session Workspace →
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
+

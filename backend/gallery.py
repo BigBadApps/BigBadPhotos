@@ -1,6 +1,7 @@
 """Gallery tokens, client favorites, comments, and stats data access."""
 from __future__ import annotations
 
+import json
 import secrets
 import sqlite3
 from datetime import datetime, timezone
@@ -26,6 +27,13 @@ def _is_expired(expires_at: str | None) -> bool:
 
 
 def _token_to_dict(row: sqlite3.Row) -> dict:
+    photo_ids = None
+    raw = row['photo_ids_json'] if 'photo_ids_json' in row.keys() else None
+    if raw:
+        try:
+            photo_ids = json.loads(raw)
+        except Exception:
+            photo_ids = None
     return {
         'id': row['id'],
         'session_id': row['session_id'],
@@ -33,6 +41,8 @@ def _token_to_dict(row: sqlite3.Row) -> dict:
         'token': row['token'],
         'label': row['label'],
         'scope': row['scope'],
+        'photo_ids': photo_ids,
+        'photoIds': photo_ids,
         'expires_at': row['expires_at'],
         'expiresAt': row['expires_at'],
         'revoked': bool(row['revoked']),
@@ -73,14 +83,16 @@ def create_token(
     label: str = 'Main Gallery',
     scope: str = 'exports',
     expires_at: str | None = None,
+    photo_ids: list[int] | None = None,
 ) -> dict:
     token_value = secrets.token_urlsafe(24)
     now = _now()
+    photo_ids_json = json.dumps(photo_ids) if photo_ids else None
     conn = db.get()
     cur = conn.execute(
-        "INSERT INTO gallery_tokens (session_id, token, label, scope, expires_at, revoked, created_at, updated_at)"
-        " VALUES (?, ?, ?, ?, ?, 0, ?, ?)",
-        (session_id, token_value, label, scope, expires_at, now, now),
+        "INSERT INTO gallery_tokens (session_id, token, label, scope, expires_at, revoked, photo_ids_json, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)",
+        (session_id, token_value, label, scope, expires_at, photo_ids_json, now, now),
     )
     conn.commit()
     row = conn.execute("SELECT * FROM gallery_tokens WHERE id = ?", (cur.lastrowid,)).fetchone()

@@ -21,6 +21,7 @@ export default defineConfig({
       '/runs':    API_PROXY,
       '/photos':  API_PROXY,
       '/settings': API_PROXY,
+      '/gallery/api': API_PROXY,
     },
   },
   build: {
