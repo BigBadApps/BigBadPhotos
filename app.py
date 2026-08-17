@@ -568,9 +568,15 @@ def sessions_update(session_id):
         updated = sessions.update(session_id, data)
     except sessions.SessionError as e:
         return jsonify({'error': 'bad_config', 'detail': str(e)}), 400
+    drive_revoke_failed = []
     if was_gallery_enabled and not updated.get('galleryEnabled', True):
-        _remove_gallery_drive_access(updated)
-    return jsonify({'ok': True, 'session': updated})
+        drive_revoke_failed = _remove_gallery_drive_access(updated)
+    resp = {'ok': True, 'session': updated}
+    if drive_revoke_failed:
+        resp['driveRevokeWarning'] = (
+            'Gallery disabled, but Drive access could not be revoked for: '
+            + ', '.join(drive_revoke_failed))
+    return jsonify(resp)
 
 
 @app.delete('/sessions/<int:session_id>')
@@ -830,17 +836,21 @@ def validate_gallery_token(token_value: str) -> dict | None:
     return token_dict
 
 
-def _remove_gallery_drive_access(session_dict: dict) -> None:
+def _remove_gallery_drive_access(session_dict: dict) -> list[str]:
+    """Best-effort revoke of public Drive access; returns folder keys that failed."""
     token = _google_token()
+    keys = ('exportFolderId', 'export_folder_id', 'favoritesFolderId', 'favorites_folder_id')
     if not token:
-        return
-    for key in ('exportFolderId', 'export_folder_id', 'favoritesFolderId', 'favorites_folder_id'):
+        return [k for k in keys if session_dict.get(k)]
+    failed = []
+    for key in keys:
         folder = session_dict.get(key)
         if folder:
             try:
                 google_drive.remove_public_read(folder, token)
             except Exception:
-                pass
+                failed.append(key)
+    return failed
 
 
 def get_or_create_visitor_id() -> str:
@@ -988,8 +998,13 @@ def session_gallery_revoke(session_id):
         return jsonify({'error': 'not_found',
                         'detail': f'session not found: {session_id}'}), 404
     gallery.revoke_tokens_for_session(session_id)
-    _remove_gallery_drive_access(s)
-    return jsonify({'ok': True})
+    failed = _remove_gallery_drive_access(s)
+    resp = {'ok': True}
+    if failed:
+        resp['driveRevokeWarning'] = (
+            'Tokens revoked, but Drive access could not be revoked for: '
+            + ', '.join(failed))
+    return jsonify(resp)
 
 
 @app.post('/sessions/<int:session_id>/gallery/regenerate')
