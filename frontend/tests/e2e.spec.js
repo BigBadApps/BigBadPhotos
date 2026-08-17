@@ -18,7 +18,7 @@ async function bypassAuth(page) {
  */
 async function loadPhotosAndGoCulling(page) {
   await bypassAuth(page)
-  await page.locator('nav button', { hasText: 'One-off' }).click()
+  await page.goto('/one-off')
   await expect(page.locator('.meta', { hasText: 'Session folders' })).toBeVisible({ timeout: 5_000 })
 
   await page.evaluate(() => {
@@ -226,6 +226,23 @@ test('Full Session flow: create session -> SessionArea -> start run -> RunView -
     })
   })
 
+  await page.route(`**/sessions/${fakeSessionId}/runs/999`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        run: {
+          id: 999,
+          sessionId: fakeSessionId,
+          status: 'running',
+          phase: 'watching',
+          startedAt: '2026-08-15T10:00:00Z',
+          counts: { scored: 2, awaiting_review: 1, exported: 1 },
+        },
+      }),
+    })
+  })
+
   // 1. Open list and click the session card to navigate to SessionAreaView
   await page.locator('button', { hasText: 'Open' }).click()
   await expect(page.locator('.card', { hasText: sessionName })).toBeVisible()
@@ -306,11 +323,11 @@ test('Full Session flow: create session -> SessionArea -> start run -> RunView -
   expect(criticalErrors).toEqual([])
 })
 
-// ── One-off Landing View & Bottom Nav ──────────────────────────────────────
+// ── One-off Landing View ──────────────────────────────────────────────────
 
-test('bottom nav: One-off button goes to /one-off with LandingView', async ({ page }) => {
+test('SessionHub: One-off button goes to /one-off with LandingView', async ({ page }) => {
   await bypassAuth(page)
-  await page.locator('nav button', { hasText: 'One-off' }).click()
+  await page.locator('button', { hasText: 'One-off' }).click()
   await expect(page).toHaveURL('/one-off')
   await expect(page.locator('.meta', { hasText: 'Session folders' })).toBeVisible()
   await expect(page.locator('button', { hasText: 'Begin Review' })).toBeDisabled()
@@ -336,22 +353,17 @@ test('? key opens help overlay and Escape closes it', async ({ page }) => {
   await expect(page.locator('text=Keyboard Shortcuts')).not.toBeVisible()
 })
 
-test('keyboard navigation: 1=/, 2=/one-off, 3/4/5 require photos', async ({ page }) => {
+test('keyboard navigation: 1=/, 2/3/4 require photos', async ({ page }) => {
   await bypassAuth(page)
   await page.locator('body').click()
 
-  // Press '2' -> navigates to /one-off
-  await page.keyboard.press('2')
-  await expect(page).toHaveURL('/one-off')
-  await expect(page.locator('.meta', { hasText: 'Session folders' })).toBeVisible()
-
-  // Press '1' -> navigates back to /
+  // Press '1' -> navigates to /
   await page.keyboard.press('1')
   await expect(page).toHaveURL('/')
   await expect(page.locator('h1', { hasText: 'Session Configuration' })).toBeVisible()
 
-  // Press '3', '4', '5' without photos -> shows toast and stays on /
-  for (const key of ['3', '4', '5']) {
+  // Press '2', '3', '4' without photos -> shows toast and stays on /
+  for (const key of ['2', '3', '4']) {
     await page.keyboard.press(key)
     await expect(page.getByRole('status')).toContainText('Select a source folder first', { timeout: 3_000 })
     await expect(page).toHaveURL('/')

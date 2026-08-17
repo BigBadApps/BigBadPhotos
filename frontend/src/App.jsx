@@ -131,20 +131,19 @@ function AppContent() {
         return;
       }
       if (k === '1' && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); navigate('/'); return; }
-      if (k === '2' && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); navigate('/one-off'); return; }
-      if (k === '3' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (k === '2' && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         if (!hasPhotos) { setToast({ message: 'Select a source folder first', at: Date.now() }); return; }
         navigate('/cull');
         return;
       }
-      if (k === '4' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (k === '3' && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         if (!hasPhotos) { setToast({ message: 'Select a source folder first', at: Date.now() }); return; }
         navigate('/compare');
         return;
       }
-      if (k === '5' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (k === '4' && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         if (!hasPhotos) { setToast({ message: 'Select a source folder first', at: Date.now() }); return; }
         navigate('/review');
@@ -517,7 +516,6 @@ function AppContent() {
       }}>
         {[
           ['/', 'Sessions', false],
-          ['/one-off', 'One-off', false],
           ['/cull', 'Cull', true],
           ['/compare', 'Compare', true],
           ['/review', 'Export', true],

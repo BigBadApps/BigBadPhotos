@@ -2,77 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Icon from '../components/Icon'
 import GoogleDriveFolderPicker from '../components/GoogleDriveFolderPicker'
+import { OblToggle, Chip, FieldLabel, PickerRow, PRESETS } from '../components/SessionFormParts'
 import * as sessionsClient from '../api/sessionsClient'
 import { useStore } from '../store'
-
-const PRESETS = { strict: 0.72, balanced: 0.60, loose: 0.45 }
-
-function OblToggle({ checked, onChange }) {
-  return (
-    <label className="toggle">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
-      <span className="toggle-track"><span className="toggle-thumb" /></span>
-    </label>
-  )
-}
-
-function Chip({ active, onClick, children }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="btn fs-xs"
-      style={{
-        flex: 1,
-        minHeight: 44,
-        background: active ? 'color-mix(in oklab, var(--accent) 18%, var(--bg-3))' : 'var(--bg-3)',
-        color: active ? 'var(--accent)' : 'var(--fg-2)',
-        border: active ? '1px solid color-mix(in oklab, var(--accent) 55%, var(--line))' : '1px solid var(--line)',
-      }}
-    >
-      {children}
-    </button>
-  )
-}
-
-function FieldLabel({ children }) {
-  return (
-    <div className="meta" style={{ marginBottom: 'var(--sp-2)' }}>{children}</div>
-  )
-}
-
-function PickerRow({ label, value, placeholder, onPick }) {
-  return (
-    <div>
-      <FieldLabel>{label}</FieldLabel>
-      <button
-        type="button"
-        onClick={onPick}
-        style={{
-          width: '100%',
-          minHeight: 44,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          padding: '10px 12px',
-          borderRadius: 8,
-          textAlign: 'left',
-          background: value ? 'color-mix(in oklab, var(--keep) 10%, transparent)' : 'var(--bg-3)',
-          border: value
-            ? '1px solid color-mix(in oklab, var(--keep) 30%, transparent)'
-            : '1px solid var(--line)',
-          color: value ? 'var(--keep)' : 'var(--fg-2)',
-        }}
-      >
-        <Icon name={value ? 'folderOpen' : 'folder'} size={18} style={{ flexShrink: 0 }} />
-        <span className="fs-sm" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {value || placeholder}
-        </span>
-        <Icon name="arrowR" size={14} style={{ opacity: 0.5, flexShrink: 0 }} />
-      </button>
-    </div>
-  )
-}
 
 export default function SessionHubView() {
   const navigate = useNavigate()
@@ -258,7 +190,7 @@ export default function SessionHubView() {
         </p>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 'var(--sp-4)', maxWidth: 520, marginBottom: 'var(--sp-6)' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 'var(--sp-4)', maxWidth: 560, marginBottom: 'var(--sp-6)' }}>
         <button
           type="button"
           className="btn btn-primary btn-uppercase"
@@ -276,6 +208,15 @@ export default function SessionHubView() {
         >
           <Icon name="folderOpen" size={18} />
           <span>Open</span>
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost btn-uppercase"
+          style={{ height: 56, fontSize: 'var(--fs-sm)', gap: 10 }}
+          onClick={() => navigate('/one-off')}
+        >
+          <Icon name="zap" size={18} />
+          <span>One-off</span>
         </button>
       </div>
 
@@ -377,7 +318,7 @@ export default function SessionHubView() {
       )}
 
       {formOpen && form && (
-        <div className="view" style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'var(--bg)', padding: 'var(--pad)', paddingBottom: 96 }}>
+        <div className="view" style={{ position: 'fixed', inset: 0, zIndex: 60, background: 'var(--bg)', padding: 'var(--pad)', paddingBottom: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
           <div className="flex jcsb aic" style={{ marginBottom: 'var(--sp-5)' }}>
             <div>
               <div className="meta" style={{ color: 'var(--accent)', marginBottom: 4 }}>New session</div>
@@ -390,7 +331,7 @@ export default function SessionHubView() {
             </button>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-5)' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--sp-5)', paddingBottom: 80 }}>
             <div>
               <FieldLabel>Name</FieldLabel>
               <input
@@ -530,7 +471,7 @@ export default function SessionHubView() {
             )}
           </div>
 
-          <div style={{ position: 'sticky', bottom: 56, marginTop: 'var(--sp-6)', paddingTop: 'var(--sp-3)', background: 'var(--bg)', zIndex: 5 }}>
+          <div style={{ position: 'sticky', bottom: 56, marginTop: 'var(--sp-8)', paddingTop: 'var(--sp-4)', paddingBottom: 'var(--sp-3)', background: 'var(--bg)', zIndex: 5 }}>
             <button
               type="button"
               className="btn btn-primary btn-uppercase"

@@ -2,7 +2,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-15-session-hub-redesign.md`
 **Phases:** 4
-**Branch:** work directly on local `main`
+**Branch:** `bbaf/bigbadphotos-session-hub-redesign`
 
 ---
 
