@@ -8,7 +8,9 @@
 
 **Tech Stack:** Python/Flask (backend), SQLite (DB), Google Drive API (uploads), React/Vite (frontend), pyftpdlib (FTP server), watchdog (file watcher)
 
-**Design Spec:** `docs/superpowers/specs/2026-08-17-camera-bridge-ingest-pipeline-design.md`
+**Design Specs:**
+- `docs/superpowers/specs/2026-08-17-camera-bridge-ingest-pipeline-design.md`
+- `docs/superpowers/specs/2026-08-17-auto-rotate-portrait-images-design.md`
 
 ## Global Constraints
 
@@ -35,16 +37,22 @@
 | Create | `backend/tests/test_ingest_pipeline.py` | Unit tests for ingest pipeline |
 | Create | `backend/tests/test_ingest_routes.py` | Route tests for `/ingest` endpoint |
 | Modify | `backend/tests/test_session_routes.py` | Tests for new session ingest fields |
+| Create | `backend/orientation.py` | EXIF orientation normalization (auto-rotate) |
+| Modify | `backend/pipeline.py` | Call `normalize_orientation` in `_download()`, change `_archive()` to upload+trash |
+| Modify | `backend/google_drive.py` | Add `trash_file()` helper |
+| Create | `backend/tests/test_orientation.py` | Unit tests for orientation normalization |
+| Modify | `backend/tests/test_pipeline.py` | Tests for rotated download + upload-based archive |
 
 ## Execution Phases
 
 ```
-Phase 1 (Sequential)     Phase 2 (Parallel)           Phase 3 (Sequential)
-─────────────────────    ─────────────────────────    ─────────────────────
-Task 1: DB Schema v5     Task 3: /ingest endpoint     Task 6: Integration
-Task 2: Ingest Pipeline     → Antigravity                  tests + docs
+Phase 1 (Sequential)     Phase 2 (Parallel)                Phase 3 (Sequential)
+─────────────────────    ──────────────────────────────    ─────────────────────
+Task 1: DB Schema v5     Task 3: /ingest endpoint          Task 7: Integration
+Task 2: Ingest Pipeline     → Antigravity                       tests + docs
                          Task 4: FTP wiring
-                            → FreeBuff
+                          + Task 4b: Auto-rotate portraits
+                            → FreeBuff (sequential pair)
                          Task 5: Sessions UI
                             → OpenCode
 ```
@@ -901,6 +909,374 @@ git commit -m "feat: wire FTP ingest + burst watcher into app startup"
 
 ---
 
+### Task 4b: Auto-Rotate Portrait Images
+
+**Agent:** FreeBuff (after Task 4 completes)
+
+**Design Spec:** `docs/superpowers/specs/2026-08-17-auto-rotate-portrait-images-design.md`
+
+**Files:**
+- Create: `backend/orientation.py`
+- Modify: `backend/google_drive.py` — add `trash_file()`
+- Modify: `backend/pipeline.py` — call `normalize_orientation` in `_download()`, change `_archive()` to upload+trash
+- Create: `backend/tests/test_orientation.py`
+- Modify: `backend/tests/test_pipeline.py` — add `trash_file` to `FakeDrive`, test rotated download + upload-based archive
+
+**Interfaces:**
+- Consumes: `PIL.ImageOps.exif_transpose` (Pillow, already a dependency), `backend.google_drive.upload_file()`, `backend.google_drive.find_by_app_property()`
+- Produces: `normalize_orientation(path: str) -> bool`, `google_drive.trash_file(access_token: str, file_id: str) -> dict`
+
+- [ ] **Step 1: Write failing tests for `orientation.py`**
+
+Create `backend/tests/test_orientation.py`:
+
+```python
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
+import pytest
+from PIL import Image
+import piexif
+
+
+def _make_sideways_jpeg(path, orientation=6):
+    """Create a 120x80 landscape-pixel JPEG with EXIF Orientation tag.
+    Orientation=6 means 'rotated 90 CW' — a portrait shot stored as landscape pixels."""
+    img = Image.new('RGB', (120, 80), color=(255, 0, 0))
+    exif_dict = {'0th': {piexif.ImageIFD.Orientation: orientation}}
+    exif_bytes = piexif.dump(exif_dict)
+    img.save(path, 'JPEG', exif=exif_bytes)
+
+
+def test_normalize_rotates_sideways_image(tmp_path):
+    from backend.orientation import normalize_orientation
+
+    path = str(tmp_path / 'sideways.jpg')
+    _make_sideways_jpeg(path, orientation=6)
+
+    # Before: landscape pixels (120x80)
+    with Image.open(path) as img:
+        assert img.size == (120, 80)
+
+    result = normalize_orientation(path)
+    assert result is True
+
+    # After: portrait pixels (80x120), Orientation=1 or absent
+    with Image.open(path) as img:
+        assert img.size == (80, 120)
+        exif = img.getexif()
+        orient = exif.get(0x0112, 1)
+        assert orient == 1
+
+
+def test_normalize_noop_when_already_upright(tmp_path):
+    from backend.orientation import normalize_orientation
+
+    path = str(tmp_path / 'upright.jpg')
+    _make_sideways_jpeg(path, orientation=1)
+
+    original_bytes = open(path, 'rb').read()
+    result = normalize_orientation(path)
+    assert result is False
+
+    after_bytes = open(path, 'rb').read()
+    assert original_bytes == after_bytes
+
+
+def test_normalize_noop_when_no_exif(tmp_path):
+    from backend.orientation import normalize_orientation
+
+    path = str(tmp_path / 'noexif.jpg')
+    img = Image.new('RGB', (120, 80), color=(0, 255, 0))
+    img.save(path, 'JPEG')
+
+    result = normalize_orientation(path)
+    assert result is False
+
+
+def test_normalize_handles_all_orientations(tmp_path):
+    """Orientations 2-8 should all be normalized; 1 should be a no-op."""
+    from backend.orientation import normalize_orientation
+
+    for orient in range(1, 9):
+        path = str(tmp_path / f'orient_{orient}.jpg')
+        _make_sideways_jpeg(path, orientation=orient)
+        result = normalize_orientation(path)
+        if orient == 1:
+            assert result is False
+        else:
+            assert result is True
+            with Image.open(path) as img:
+                exif = img.getexif()
+                assert exif.get(0x0112, 1) == 1
+```
+
+- [ ] **Step 2: Run tests — expect FAIL**
+
+```bash
+python -m pytest backend/tests/test_orientation.py -v
+```
+
+Expected: `ModuleNotFoundError: No module named 'backend.orientation'`
+
+Note: `piexif` may not be installed. If the import fails, install it:
+
+```bash
+pip install piexif
+```
+
+And add `piexif` to `requirements.txt` (test dependency only — the implementation uses Pillow only).
+
+- [ ] **Step 3: Implement `backend/orientation.py`**
+
+```python
+"""EXIF orientation normalization — physically rewrite pixels upright."""
+from __future__ import annotations
+
+import logging
+
+from PIL import Image, ImageOps
+
+logger = logging.getLogger(__name__)
+
+ORIENTATION_TAG = 0x0112
+
+
+def normalize_orientation(path: str) -> bool:
+    """Rewrite pixels upright per EXIF Orientation tag, strip tag to 1.
+
+    Returns True if the file was rewritten, False if already upright or
+    no orientation tag present."""
+    with Image.open(path) as img:
+        exif = img.getexif()
+        orientation = exif.get(ORIENTATION_TAG)
+        if orientation is None or orientation == 1:
+            return False
+
+        transposed = ImageOps.exif_transpose(img)
+
+    transposed.save(path, 'JPEG', quality=95, exif=transposed.getexif().tobytes())
+    return True
+```
+
+- [ ] **Step 4: Run orientation tests — expect PASS**
+
+```bash
+python -m pytest backend/tests/test_orientation.py -v
+```
+
+- [ ] **Step 5: Commit orientation module**
+
+```bash
+git add backend/orientation.py backend/tests/test_orientation.py
+git commit -m "feat: EXIF orientation normalization for portrait images"
+```
+
+- [ ] **Step 6: Add `trash_file` to `backend/google_drive.py`**
+
+Add after the `move_file` function:
+
+```python
+def trash_file(access_token: str, file_id: str) -> dict:
+    resp = requests.patch(
+        _files_url(file_id),
+        headers=_headers(access_token),
+        json={'trashed': True},
+        params={'supportsAllDrives': 'true'},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+```
+
+- [ ] **Step 7: Add `trash_file` to `FakeDrive` in `backend/tests/test_pipeline.py`**
+
+Add to the `FakeDrive` class:
+
+```python
+    def trash_file(self, token, file_id):
+        self.trashed = getattr(self, 'trashed', [])
+        self.trashed.append(file_id)
+        return {'id': file_id, 'trashed': True}
+```
+
+- [ ] **Step 8: Wire `normalize_orientation` into `Pipeline._download()`**
+
+In `backend/pipeline.py`, add import at top:
+
+```python
+from backend.orientation import normalize_orientation
+```
+
+In `_download()`, after the file is written and before `_set_photo_state`, add the normalization call:
+
+```python
+    def _download(self, token: str) -> None:
+        if self._auth_error:
+            return
+        for row in self._select_rows('claimed'):
+            if self._auth_error:
+                return
+            try:
+                data, _name, _mime = self._drive.download_file(
+                    token, row['drive_file_id'], filename=row['filename'])
+                os.makedirs(self._raw_dir, exist_ok=True)
+                with open(self._raw_path(row), 'wb') as fh:
+                    fh.write(data)
+                try:
+                    normalize_orientation(self._raw_path(row))
+                except Exception as orient_exc:
+                    logger.warning(
+                        'Orientation normalization failed for %s: %s',
+                        row['filename'], orient_exc)
+                self._set_photo_state(row['id'], state='downloaded')
+            except Exception as exc:
+                self._handle_step_exception(row, exc, 'download_failed')
+```
+
+- [ ] **Step 9: Change `_archive()` from move to upload+trash**
+
+Replace the `moved_to_archive` block in `_archive()`:
+
+```python
+                if not row['moved_to_archive']:
+                    existing_archive = self._drive.find_by_app_property(
+                        token, archive_id, 'bbp_photo_id', str(row['id']))
+                    if not existing_archive:
+                        raw_path = self._raw_path(row)
+                        with open(raw_path, 'rb') as fh:
+                            raw_data = fh.read()
+                        self._drive.upload_file(
+                            token, archive_id, row['filename'], raw_data,
+                            'image/jpeg',
+                            app_properties={'bbp_photo_id': str(row['id'])})
+                    self._drive.trash_file(token, row['drive_file_id'])
+                    self._set_photo_state(row['id'], moved_to_archive=1)
+```
+
+This replaces:
+
+```python
+                if not row['moved_to_archive']:
+                    self._drive.move_file(
+                        token, row['drive_file_id'], archive_id,
+                        self.session['sourceFolderId'])
+                    self._set_photo_state(row['id'], moved_to_archive=1)
+```
+
+- [ ] **Step 10: Write pipeline tests for auto-rotate**
+
+Add to `backend/tests/test_pipeline.py`:
+
+```python
+def test_download_normalizes_orientation(tmp_path):
+    """Downloaded sideways JPEG should be physically rotated upright."""
+    from PIL import Image
+    import piexif
+
+    # Create a sideways JPEG (Orientation=6)
+    img = Image.new('RGB', (120, 80), color=(255, 0, 0))
+    exif_dict = {'0th': {piexif.ImageIFD.Orientation: 6}}
+    exif_bytes = piexif.dump(exif_dict)
+    import io
+    buf = io.BytesIO()
+    img.save(buf, 'JPEG', exif=exif_bytes)
+    sideways_bytes = buf.getvalue()
+
+    drive = FakeDrive({'keep_001.jpg': sideways_bytes})
+    pipe = _make_pipeline(tmp_path, drive, files=['keep_001.jpg'])
+    pipe._download('tok')
+
+    raw_path = pipe._raw_path({'filename': 'keep_001.jpg'})
+    with Image.open(raw_path) as result:
+        # Should now be portrait (80x120), not landscape (120x80)
+        assert result.size == (80, 120)
+
+
+def test_archive_uploads_and_trashes(tmp_path):
+    """Archive should upload the normalized file then trash the original."""
+    drive = FakeDrive({'keep_001.jpg': _jpeg_bytes()})
+    pipe = _make_pipeline(tmp_path, drive, files=['keep_001.jpg'])
+
+    pipe._download('tok')
+    pipe._score()
+    pipe._export('tok')
+    pipe._archive('tok')
+
+    # Should have uploaded to archive folder (not moved)
+    archive_uploads = [u for u in drive.uploads if u[0] == 'id-_archive']
+    assert len([u for u in archive_uploads if u[1] == 'keep_001.jpg']) == 1
+
+    # Should have trashed the original
+    assert hasattr(drive, 'trashed')
+    assert 'id-keep_001.jpg' in drive.trashed
+
+    # Should NOT have called move_file for archive
+    archive_moves = [m for m in drive.moves if m[1] == 'id-_archive']
+    assert len(archive_moves) == 0
+
+
+def test_archive_retry_skips_reupload_on_trash_failure(tmp_path):
+    """If trash fails after upload, retry should find existing upload and only retry trash."""
+
+    class TrashFailingDrive(FakeDrive):
+        def __init__(self, files):
+            super().__init__(files)
+            self.trash_attempts = 0
+
+        def trash_file(self, token, file_id):
+            self.trash_attempts += 1
+            if self.trash_attempts == 1:
+                raise DriveHTTPError(500, 'transient trash failure')
+            self.trashed = getattr(self, 'trashed', [])
+            self.trashed.append(file_id)
+            return {'id': file_id, 'trashed': True}
+
+    drive = TrashFailingDrive({'keep_001.jpg': _jpeg_bytes()})
+    pipe = _make_pipeline(tmp_path, drive, files=['keep_001.jpg'])
+
+    pipe._download('tok')
+    pipe._score()
+    pipe._export('tok')
+
+    # First archive attempt — upload succeeds, trash fails
+    pipe._archive('tok')
+    upload_count_after_first = len([u for u in drive.uploads if u[1] == 'keep_001.jpg' and u[0] == 'id-_archive'])
+    assert upload_count_after_first == 1
+
+    # Second archive attempt — should find existing upload, only retry trash
+    pipe._archive('tok')
+    upload_count_after_second = len([u for u in drive.uploads if u[1] == 'keep_001.jpg' and u[0] == 'id-_archive'])
+    assert upload_count_after_second == 1  # no re-upload
+    assert drive.trash_attempts == 2
+```
+
+Note: These tests require a `_make_pipeline` helper. If it doesn't exist in the test file, check the existing test patterns. The helper typically creates a session, a run, inserts photo rows, and returns a `Pipeline` instance with `FakeDrive` injected. Match the existing pattern exactly.
+
+- [ ] **Step 11: Run all pipeline tests**
+
+```bash
+python -m pytest backend/tests/test_pipeline.py -v
+```
+
+- [ ] **Step 12: Run full test suite**
+
+```bash
+python -m pytest backend/tests/ -v
+```
+
+- [ ] **Step 13: Commit**
+
+```bash
+git add backend/orientation.py backend/google_drive.py backend/pipeline.py \
+  backend/tests/test_orientation.py backend/tests/test_pipeline.py
+git commit -m "feat: auto-rotate portrait images on download, upload+trash for archive"
+```
+
+---
+
 ### Task 5: Sessions UI — Ingest Fields
 
 **Agent:** OpenCode
@@ -1148,7 +1524,7 @@ git commit -m "feat: session ingest fields, API key, and UI controls"
 
 ## Phase 3: Integration (Sequential)
 
-### Task 6: Integration Tests + iOS Shortcut Guide
+### Task 7: Integration Tests + iOS Shortcut Guide
 
 **Agent:** Orchestrator (or any available agent)
 
@@ -1315,5 +1691,5 @@ python -m pytest backend/tests/ -v
 | Phase | Tasks | Agent(s) | Dependencies |
 |-------|-------|----------|--------------|
 | 1 | Task 1 (DB), Task 2 (Pipeline) | Sequential — any single agent | None |
-| 2 | Task 3 (REST), Task 4 (FTP), Task 5 (UI) | Parallel — Antigravity, FreeBuff, OpenCode | Phase 1 complete |
-| 3 | Task 6 (Integration + Docs) | Sequential — any single agent | Phase 2 complete |
+| 2 | Task 3 (REST), Task 4 + 4b (FTP + Auto-rotate), Task 5 (UI) | Parallel — Antigravity, FreeBuff, OpenCode | Phase 1 complete |
+| 3 | Task 7 (Integration + Docs) | Sequential — any single agent | Phase 2 complete |

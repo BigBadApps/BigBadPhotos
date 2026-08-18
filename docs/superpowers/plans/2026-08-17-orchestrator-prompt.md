@@ -59,12 +59,12 @@ Available agents: [list them]
 Execution plan:
   Phase 1 (me, sequential): DB schema v5 + shared ingest pipeline
   Phase 2 (parallel):
-    - Antigravity: /ingest REST endpoint
-    - FreeBuff: FTP server wiring
-    - OpenCode: Sessions UI + ingest fields
-  Phase 3 (me, sequential): Integration tests + iOS Shortcut guide
+    - Antigravity: /ingest REST endpoint (Task 3)
+    - FreeBuff: FTP server wiring + auto-rotate portraits (Tasks 4 + 4b, sequential)
+    - OpenCode: Sessions UI + ingest fields (Task 5)
+  Phase 3 (me, sequential): Integration tests + iOS Shortcut guide (Task 7)
 
-Estimated: 6 tasks, ~30 min total with parallel Phase 2
+Estimated: 7 tasks, ~40 min total with parallel Phase 2
 
 Ready to begin? (yes/no)
 ```
@@ -114,26 +114,32 @@ Important:
 - Run `python -m pytest backend/tests/test_ingest_routes.py -v` to verify
 ```
 
-### FreeBuff (Task 4: FTP Server Wiring)
+### FreeBuff (Tasks 4 + 4b: FTP Server Wiring + Auto-Rotate Portraits)
 
 Send to tmux session `freebuff`:
 
 ```
-You are implementing Task 4 of the Camera Bridge Ingest Pipeline for BigBadPhotos.
+You are implementing Tasks 4 and 4b of the Camera Bridge Ingest Pipeline for BigBadPhotos.
 
 Working directory: /Volumes/BigBadDrive_1/BigBadPhotos
 Branch: bbaf/bigbadphotos-camera-bridge-ingest (already checked out)
 
 Phase 1 is complete — `backend/ingest_pipeline.py` and DB schema v5 exist.
 
-Your task: Wire `ftp_ingest.py` and `burst_watcher.py` into `app.py` startup, gated on `BBP_FTP_PORT` env var. Full task details are in `docs/superpowers/plans/2026-08-17-camera-bridge-ingest-pipeline.md` under "Task 4: FTP Server Wiring".
+You have TWO tasks to execute sequentially:
 
-Read the plan file, then implement Task 4 step by step. Run the manual verification command in the plan. Commit when verified. Signal completion by creating a file: `touch /tmp/bbp_agent_done_freebuff`
+TASK 4: Wire `ftp_ingest.py` and `burst_watcher.py` into `app.py` startup, gated on `BBP_FTP_PORT` env var. Full details in `docs/superpowers/plans/2026-08-17-camera-bridge-ingest-pipeline.md` under "Task 4: FTP Server Wiring". Commit when done.
+
+TASK 4b: Auto-rotate portrait images. Create `backend/orientation.py` with EXIF normalization, add `trash_file()` to `backend/google_drive.py`, modify `backend/pipeline.py` to normalize orientation after download and use upload+trash for archive instead of move. Full details under "Task 4b: Auto-Rotate Portrait Images" in the same plan file. Also read the design spec at `docs/superpowers/specs/2026-08-17-auto-rotate-portrait-images-design.md`.
+
+Read the plan file AND the auto-rotate design spec, then implement both tasks in order. Run tests after each. Commit after each. Signal completion by creating a file: `touch /tmp/bbp_agent_done_freebuff`
 
 Important:
-- Do NOT modify any file outside your task's file list
+- Task 4 modifies `app.py` (FTP startup block at end of file — separate section from Antigravity's routes)
+- Task 4b modifies `backend/pipeline.py`, `backend/google_drive.py`, and `backend/tests/test_pipeline.py`
+- Do NOT modify files outside your task file lists
 - Do NOT push to remote
-- Your changes to `app.py` are in a separate section from Antigravity's — no merge conflicts expected
+- Run `python -m pytest backend/tests/test_orientation.py backend/tests/test_pipeline.py -v` to verify Task 4b
 ```
 
 ### OpenCode (Task 5: Sessions UI)
@@ -202,7 +208,7 @@ Wait for all three files to appear. Check every 60 seconds. When all three exist
 
 ## Step 7: Execute Phase 3 (You)
 
-Execute Task 6 from the plan yourself. Add integration tests and the iOS Shortcut guide. Run full test suite. Commit.
+Execute Task 7 from the plan yourself. Add integration tests and the iOS Shortcut guide. Run full test suite. Commit.
 
 ## Step 8: Final Validation
 
@@ -228,4 +234,4 @@ Report completion to the user with:
 
 - **Agent unresponsive:** If an agent doesn't produce a completion signal within 15 minutes, check its tmux pane for errors. If stuck, execute the task yourself.
 - **Test failures after merge:** Identify the breaking commit with `git bisect` or by reading the test output. Send the relevant agent a fix request.
-- **Merge conflicts:** Expected only in `app.py` between Tasks 3 and 4. Antigravity adds routes (middle of file), FreeBuff adds FTP startup (end of file). Resolve by keeping both sections.
+- **Merge conflicts:** Expected only in `app.py` between Tasks 3 and 4. Antigravity adds routes (middle of file), FreeBuff adds FTP startup (end of file). Resolve by keeping both sections. FreeBuff's Task 4b also touches `pipeline.py` and `google_drive.py` — no other agent modifies those files, so no conflicts expected there.
