@@ -1640,11 +1640,15 @@ def edit_file():
 
 # Camera Bridge: FTP ingest + burst watcher (opt-in via BBP_FTP_PORT)
 if os.environ.get('BBP_FTP_PORT'):
+    import tempfile
+
     from backend.ftp_ingest import start_ftp_thread
     from backend.burst_watcher import start_burst_watcher
     from backend import ingest_pipeline
 
-    _ftp_root = os.environ.get('BBP_FTP_ROOT', '/tmp/bbp_ftp')
+    # Defaults are computed (not hardcoded literals) and then created
+    # owner-only by _safe_makedirs — see backend/ftp_ingest.py.
+    _ftp_root = os.environ.get('BBP_FTP_ROOT') or os.path.join(tempfile.gettempdir(), 'bbp_ftp')
     _ftp_port = int(os.environ['BBP_FTP_PORT'])
     _ftp_user = os.environ.get('BBP_FTP_USER', 'bbp')
     _ftp_pass = os.environ.get('BBP_FTP_PASS', '')
@@ -1675,7 +1679,8 @@ if os.environ.get('BBP_FTP_PORT'):
         )
         start_burst_watcher(
             ingest_root=_ftp_root,
-            preview_dir=os.environ.get('BBP_PREVIEW_DIR', '/tmp/bbp_preview'),
+            preview_dir=os.environ.get('BBP_PREVIEW_DIR')
+                or os.path.join(tempfile.gettempdir(), 'bbp_preview'),
             ffmpeg_fps=int(os.environ.get('BBP_FFMPEG_FPS', '8')),
             resize_px=int(os.environ.get('BBP_RESIZE_PX', '1920')),
             window_ms=int(os.environ.get('BBP_BURST_WINDOW_MS', '2000')),
