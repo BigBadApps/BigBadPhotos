@@ -84,6 +84,12 @@ class FakeDrive:
         self._parents[name] = new_parent_id
         return {'id': file_id}
 
+    def trash_file(self, token, file_id):
+        self.trashed = getattr(self, 'trashed', [])
+        self.trashed.append(file_id)
+        return {'id': file_id, 'trashed': True}
+
+
     def find_child_by_name(self, token, parent_id, name, folders_only=False):
         self.find_calls.append((parent_id, name))
         if self._parents.get(name) == parent_id:
@@ -261,8 +267,10 @@ def test_autonomous_high_score_archives_with_export():
     assert row['state'] == 'archived'
     assert row['exported_file_id'] is not None
     assert [u[1] for u in _image_exports(drive, 'exp1')] == ['keep_1.jpg']
-    # the original was moved into the (once-ensured) archive folder
-    assert drive.moves == [('id-keep_1.jpg', 'id-_archive', 'src1')]
+    # the original was uploaded to archive and trashed
+    archive_uploads = [u for u in drive.uploads if u[0] == 'id-_archive']
+    assert len([u for u in archive_uploads if u[1] == 'keep_1.jpg']) == 1
+    assert 'id-keep_1.jpg' in getattr(drive, 'trashed', [])
     assert drive.ensure_calls == [('src1', '_archive')]
     # ensure_folder is not re-called on later polls
     pipe.poll_once()
@@ -311,8 +319,9 @@ def test_apply_decision_reject_archives_without_export():
     assert row['state'] == 'archived'
     assert row['exported_file_id'] is None
     assert _image_exports(drive, 'exp1') == []
-    # the rejected original still gets moved and sidecared
-    assert any(m[0] == 'id-keep_1.jpg' for m in drive.moves)
+    # the rejected original still gets uploaded to archive, trashed, and sidecared
+    assert 'id-keep_1.jpg' in getattr(drive, 'trashed', [])
+    assert any(u[1] == 'keep_1.jpg' and u[0] == 'id-_archive' for u in drive.uploads)
     assert any(u[1] == 'keep_1.jpg.bbp.json' for u in drive.uploads)
 
 
@@ -325,6 +334,7 @@ def test_low_score_archives_without_export():
     assert row['state'] == 'archived'
     assert row['exported_file_id'] is None
     assert _image_exports(drive, 'exp1') == []
+    assert any(u[1] == 'skip_1.jpg' and u[0] == 'id-_archive' for u in drive.uploads)
     assert any(u[1] == 'skip_1.jpg.bbp.json' for u in drive.uploads)
 
 
@@ -454,10 +464,12 @@ def test_restart_resumes_without_duplicate_export():
 
     exports = _image_exports(drive, 'exp1')
     assert [u[1] for u in exports] == ['keep_1.jpg', 'keep_2.jpg']
-    # keep_1 was NOT re-exported, and the archived rows were not re-moved
+    # keep_1 was NOT re-exported, and the archived rows were not re-uploaded
     assert [u[1] for u in exports].count('keep_1.jpg') == 1
     assert [u[1] for u in exports].count('keep_2.jpg') == 1
-    assert [m[0] for m in drive.moves].count('id-keep_1.jpg') == 1
+    archive_uploads = [u for u in drive.uploads if u[0] == 'id-_archive']
+    assert [u[1] for u in archive_uploads].count('keep_1.jpg') == 1
+    assert [u[1] for u in archive_uploads].count('keep_2.jpg') == 1
     # no duplicate claims and the archive folder was not re-ensured
     assert len(_rows(run_id)) == 2
     assert all(r['state'] == 'archived' for r in _rows(run_id))
@@ -636,7 +648,7 @@ def test_stop_run_returns_false_when_nothing_running(monkeypatch):
 # -- review fixes: idempotent Drive retries, decisions blocked on inactive runs --
 
 class FlakyExportDrive(FakeDrive):
-    """upload_file raises a transient (500) error exactly once — a clean
+    """upload_file to export folder raises a transient (500) error exactly once — a clean
     failure where Drive never actually received the file (find_by_app_
     property correctly finds nothing) — then succeeds normally on retry."""
 
@@ -645,7 +657,7 @@ class FlakyExportDrive(FakeDrive):
         self.upload_attempts = 0
 
     def upload_file(self, token, parent_id, filename, data, mime_type=None, app_properties=None):
-        if filename.endswith('.bbp.json'):
+        if filename.endswith('.bbp.json') or parent_id == 'id-_archive':
             return super().upload_file(token, parent_id, filename, data, mime_type, app_properties)
         self.upload_attempts += 1
         if self.upload_attempts == 1:
@@ -683,7 +695,7 @@ class ExportSucceedsButResponseLost(FakeDrive):
         self.real_upload_calls = 0
 
     def upload_file(self, token, parent_id, filename, data, mime_type=None, app_properties=None):
-        if filename.endswith('.bbp.json'):
+        if filename.endswith('.bbp.json') or parent_id == 'id-_archive':
             return super().upload_file(token, parent_id, filename, data, mime_type, app_properties)
         self.real_upload_calls += 1
         result = super().upload_file(token, parent_id, filename, data, mime_type, app_properties)
@@ -707,6 +719,7 @@ def test_export_retry_after_lost_response_does_not_duplicate():
     assert row['state'] == 'archived'
     assert row['uploaded_to_export'] == 1
     assert drive.real_upload_calls == 1
+
 
 
 def test_export_does_not_reupload_once_flag_recorded():
@@ -738,27 +751,33 @@ def test_export_does_not_reupload_once_flag_recorded():
     assert row['state'] == 'exported'
 
 
-def test_archive_handles_filename_collision_across_distinct_photos():
+def test_archive_handles_filename_collision_across_distinct_photos(tmp_path):
     # Two DIFFERENT photos (distinct drive_file_id) can legitimately share a
     # filename — Canon numbering resets across cards/folders. A name-based
     # "does Drive already have this file" check would treat the first
     # photo's archived file as proof the second is already done and
-    # silently skip its move/sidecar. Each row's own work must happen
+    # silently skip its upload/trash/sidecar. Each row's own work must happen
     # independently, keyed by the row itself, not by filename.
-    drive = FakeDrive({})
+    drive = FakeDrive({'keep_1.jpg': _jpeg_bytes(1)})
     s = _session(autonomous=True)
     run_id = _run(s['id'])
+    pipe = _pipe(s, run_id, drive)
+
+    # Download raw file first so on-disk raw exists
+    pipe._claim('TOK')
+    pipe._download('TOK')
+
     conn = db.get()
     now = '2026-01-01T00:00:00+00:00'
-    for file_id in ('id-photoA', 'id-photoB'):
-        conn.execute(
-            "INSERT INTO photos (run_id, drive_file_id, filename, state,"
-            " overall_score, claimed_at, updated_at)"
-            " VALUES (?, ?, 'keep_1.jpg', 'rejected', 0.1, ?, ?)",
-            (run_id, file_id, now, now))
+    # Insert second photo sharing the filename
+    conn.execute(
+        "INSERT INTO photos (run_id, drive_file_id, filename, state,"
+        " overall_score, claimed_at, updated_at)"
+        " VALUES (?, 'id-photoB', 'keep_1.jpg', 'rejected', 0.1, ?, ?)",
+        (run_id, now, now))
+    conn.execute("UPDATE photos SET state = 'rejected' WHERE drive_file_id = 'id-keep_1.jpg'")
     conn.commit()
 
-    pipe = _pipe(s, run_id, drive)
     pipe._archive('TOK')
 
     rows = _rows(run_id)
@@ -767,27 +786,22 @@ def test_archive_handles_filename_collision_across_distinct_photos():
         assert row['state'] == 'archived'
         assert row['moved_to_archive'] == 1
         assert row['sidecar_uploaded'] == 1
-    assert sorted(m[0] for m in drive.moves) == ['id-photoA', 'id-photoB']
+    assert sorted(getattr(drive, 'trashed', [])) == ['id-keep_1.jpg', 'id-photoB']
     sidecar_uploads = [u for u in drive.uploads if u[1].endswith('.bbp.json')]
     assert len(sidecar_uploads) == 2
 
 
 class FlakyArchiveDrive(FakeDrive):
-    """move_file always succeeds; the sidecar upload fails transiently once.
-    A correct retry must not re-move the (already-moved) original and must
+    """upload_file to archive folder always succeeds; the sidecar upload fails transiently once.
+    A correct retry must not re-upload the (already-uploaded) raw file and must
     not leave the row stuck without ever completing the sidecar. moved_to_
     archive is recorded (and thus checked on retry) as its own DB write
-    immediately after the move succeeds, independent of whether the sidecar
+    immediately after the upload+trash succeeds, independent of whether the sidecar
     upload that follows in the same attempt then fails."""
 
     def __init__(self, files):
         super().__init__(files)
-        self.move_calls = 0
         self.sidecar_upload_attempts = 0
-
-    def move_file(self, token, file_id, new_parent_id, old_parent_id=None):
-        self.move_calls += 1
-        return super().move_file(token, file_id, new_parent_id, old_parent_id)
 
     def upload_file(self, token, parent_id, filename, data, mime_type=None, app_properties=None):
         if filename.endswith('.bbp.json'):
@@ -804,16 +818,17 @@ def test_archive_retry_after_sidecar_failure_does_not_remove_or_reupload():
     s = _session(autonomous=True)
     run_id = _run(s['id'])
     pipe = _pipe(s, run_id, drive)
-    pipe.poll_once()  # move succeeds; sidecar upload raises 500
+    pipe.poll_once()  # upload+trash succeeds; sidecar upload raises 500
     row = _rows(run_id)[0]
     assert row['state'] == 'rejected'
     assert row['attempts'] == 1
-    assert drive.move_calls == 1
-    pipe.poll_once()  # retry: move_file NOT repeated; sidecar retried and succeeds
+    assert row['moved_to_archive'] == 1
+    pipe.poll_once()  # retry: raw upload NOT repeated; sidecar retried and succeeds
     row = _rows(run_id)[0]
     assert row['state'] == 'archived'
-    assert drive.move_calls == 1
     assert drive.sidecar_upload_attempts == 2
+    raw_archive_uploads = [u for u in drive.uploads if u[0] == 'id-_archive' and u[1] == 'skip_1.jpg']
+    assert len(raw_archive_uploads) == 1
 
 
 class SidecarSucceedsButResponseLost(FakeDrive):
@@ -841,7 +856,7 @@ def test_archive_sidecar_retry_after_lost_response_does_not_duplicate():
     s = _session(autonomous=True)
     run_id = _run(s['id'])
     pipe = _pipe(s, run_id, drive)
-    pipe.poll_once()  # move succeeds; sidecar upload "succeeds" server-side
+    pipe.poll_once()  # upload+trash succeeds; sidecar upload "succeeds" server-side
                        # but the client sees a 500
     row = _rows(run_id)[0]
     assert row['state'] == 'rejected'
@@ -855,6 +870,7 @@ def test_archive_sidecar_retry_after_lost_response_does_not_duplicate():
     assert drive.real_sidecar_upload_calls == 1
     sidecar_uploads = [u for u in drive.uploads if u[1].endswith('.bbp.json')]
     assert len(sidecar_uploads) == 1
+
 
 
 def test_apply_decision_raises_when_run_not_active():
@@ -902,4 +918,94 @@ def test_export_sets_public_read_on_export_folder():
     # A second poll_once should not call set_public_read again
     pipe.poll_once()
     assert drive.set_public_read_calls == [s['exportFolderId']]
+
+
+def test_download_normalizes_orientation(tmp_path):
+    """Downloaded sideways JPEG should be physically rotated upright."""
+    from PIL import Image
+    import piexif
+    import io
+
+    # Create a sideways JPEG (Orientation=6)
+    img = Image.new('RGB', (120, 80), color=(255, 0, 0))
+    exif_dict = {'0th': {piexif.ImageIFD.Orientation: 6}}
+    exif_bytes = piexif.dump(exif_dict)
+    buf = io.BytesIO()
+    img.save(buf, 'JPEG', exif=exif_bytes)
+    sideways_bytes = buf.getvalue()
+
+    drive = FakeDrive({'keep_001.jpg': sideways_bytes})
+    s = _session()
+    run_id = _run(s['id'])
+    pipe = _pipe(s, run_id, drive)
+
+    # Claim then download
+    pipe._claim('TOK')
+    pipe._download('TOK')
+
+    row = _rows(run_id)[0]
+    raw_path = pipe._raw_path(row)
+    with Image.open(raw_path) as result:
+        # Should now be portrait (80x120), not landscape (120x80)
+        assert result.size == (80, 120)
+
+
+def test_archive_uploads_and_trashes(tmp_path):
+    """Archive should upload the normalized file then trash the original."""
+    drive = FakeDrive({'keep_001.jpg': _jpeg_bytes()})
+    s = _session(autonomous=True)
+    run_id = _run(s['id'])
+    pipe = _pipe(s, run_id, drive)
+
+    # Full poll to advance through download, score, export, archive
+    pipe.poll_once()
+
+    # Should have uploaded raw to archive folder (not moved)
+    archive_uploads = [u for u in drive.uploads if u[0] == 'id-_archive']
+    assert len([u for u in archive_uploads if u[1] == 'keep_001.jpg']) == 1
+
+    # Should have trashed the original
+    assert hasattr(drive, 'trashed')
+    assert 'id-keep_001.jpg' in drive.trashed
+
+    # Should NOT have called move_file for archive
+    archive_moves = [m for m in drive.moves if m[1] == 'id-_archive']
+    assert len(archive_moves) == 0
+
+
+def test_archive_retry_skips_reupload_on_trash_failure(tmp_path):
+    """If trash fails after upload, retry should find existing upload and only retry trash."""
+
+    class TrashFailingDrive(FakeDrive):
+        def __init__(self, files):
+            super().__init__(files)
+            self.trash_attempts = 0
+
+        def trash_file(self, token, file_id):
+            self.trash_attempts += 1
+            if self.trash_attempts == 1:
+                raise DriveHTTPError(500, 'transient trash failure')
+            self.trashed = getattr(self, 'trashed', [])
+            self.trashed.append(file_id)
+            return {'id': file_id, 'trashed': True}
+
+    drive = TrashFailingDrive({'keep_001.jpg': _jpeg_bytes()})
+    s = _session(autonomous=True)
+    run_id = _run(s['id'])
+    pipe = _pipe(s, run_id, drive)
+
+    # First poll_once — download, score, export, archive attempt (upload succeeds, trash fails)
+    pipe.poll_once()
+    upload_count_after_first = len([u for u in drive.uploads if u[1] == 'keep_001.jpg' and u[0] == 'id-_archive'])
+    assert upload_count_after_first == 1
+
+    # Second poll_once — should find existing upload via find_by_app_property, only retry trash
+    pipe.poll_once()
+    upload_count_after_second = len([u for u in drive.uploads if u[1] == 'keep_001.jpg' and u[0] == 'id-_archive'])
+    assert upload_count_after_second == 1  # no re-upload
+    assert drive.trash_attempts == 2
+    row = _rows(run_id)[0]
+    assert row['state'] == 'archived'
+    assert row['moved_to_archive'] == 1
+
 
