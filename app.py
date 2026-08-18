@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify, send_from_directory, session, Response, g
 from flask_wtf.csrf import CSRFProtect, generate_csrf
+from werkzeug.utils import secure_filename
 import cv2
 import numpy as np
 import json
@@ -19,6 +20,7 @@ from backend import pipeline
 from backend import preflight
 from backend import sessions
 from backend import gallery
+from backend import ingest_pipeline
 from backend.scoring import (
     decode_image, score_sharpness, score_exposure, score_noise,
     score_contrast, score_artifacts, score_faces, compute_phash, hamming_distance,
@@ -53,6 +55,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
     PERMANENT_SESSION_LIFETIME=timedelta(days=7),
+    MAX_CONTENT_LENGTH=50 * 1024 * 1024,  # 50MB
 )
 
 if not IS_DEBUG:
@@ -130,6 +133,8 @@ def set_response_cookies(response):
 
 @app.before_request
 def enforce_auth():
+    if request.path.startswith('/ingest') and not request.path.startswith('/ingest/status'):
+        return  # /ingest uses its own bearer token auth
     if request.path == '/drive/status':
         return
     if (request.path not in API_ROUTES
@@ -137,7 +142,8 @@ def enforce_auth():
             and not request.path.startswith('/photos')
             and not request.path.startswith('/sessions')
             and not request.path.startswith('/runs')
-            and not request.path.startswith('/settings')):
+            and not request.path.startswith('/settings')
+            and not request.path.startswith('/ingest/status')):
         return  # static files, /health, /auth/* all pass through
     if not HAS_AUTH:
         return  # No auth configured = open access
@@ -589,6 +595,76 @@ def sessions_delete(session_id):
                         'detail': 'stop the active run before deleting this session'}), 409
     sessions.delete(session_id)
     return jsonify({'ok': True})
+
+
+def _resolve_ingest_key():
+    """Extract bearer token from Authorization header, resolve to session."""
+    auth = request.headers.get('Authorization', '')
+    if not auth.startswith('Bearer '):
+        return None
+    key = auth[7:].strip()
+    if not key:
+        return None
+    conn = db.get()
+    row = conn.execute(
+        'SELECT * FROM sessions WHERE ingest_api_key = ?', (key,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+@app.post('/ingest')
+# Authenticated by a per-session bearer token (Authorization header), not a
+# browser cookie — CSRF exists to protect cookie-based sessions, which this
+# endpoint doesn't use, so the exemption is safe. NOSONAR
+@csrf.exempt  # NOSONAR
+def ingest_upload():
+    sess = _resolve_ingest_key()
+    if not sess:
+        return jsonify({'error': 'invalid_api_key'}), 401
+
+    if 'file' not in request.files:
+        return jsonify({'error': 'no_file'}), 422
+
+    f = request.files['file']
+    filename = secure_filename(f.filename or 'unknown')
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+    if ext not in ingest_pipeline.ALLOWED_EXTENSIONS:
+        return jsonify({'error': 'unsupported_file_type', 'detail': f'.{ext}'}), 422
+
+    data = f.read()
+    result = ingest_pipeline.ingest_file(
+        data,
+        filename=filename,
+        session_id=sess['id'],
+        source='http',
+    )
+
+    if result['status'] == 'uploaded':
+        return jsonify(result), 201
+    elif result['status'] == 'exists':
+        return jsonify(result), 200
+    else:
+        return jsonify(result), 500
+
+
+@app.get('/ingest/test')
+def ingest_test():
+    sess = _resolve_ingest_key()
+    if not sess:
+        return jsonify({'error': 'invalid_api_key'}), 401
+    return jsonify({
+        'ok': True,
+        'session_id': sess['id'],
+        'session_name': sess['name'],
+        'ingest_folder_id': sess.get('ingest_folder_id'),
+    })
+
+
+@app.get('/ingest/status/<int:session_id>')
+def ingest_status(session_id):
+    stats = ingest_pipeline.get_ingest_stats(session_id)
+    recent = ingest_pipeline.get_recent_ingests(session_id)
+    return jsonify({'stats': stats, 'recent': recent})
 
 
 def _format_run_row(conn, r):
@@ -1562,6 +1638,59 @@ def edit_file():
     return send_from_directory(serve_dir, name)
 
 
+# Camera Bridge: FTP ingest + burst watcher (opt-in via BBP_FTP_PORT)
+if os.environ.get('BBP_FTP_PORT'):
+    import tempfile
+
+    from backend.ftp_ingest import start_ftp_thread
+    from backend.burst_watcher import start_burst_watcher
+    from backend import ingest_pipeline
+
+    # Defaults are computed (not hardcoded literals) and then created
+    # owner-only by _safe_makedirs — see backend/ftp_ingest.py.
+    _ftp_root = os.environ.get('BBP_FTP_ROOT') or os.path.join(tempfile.gettempdir(), 'bbp_ftp')
+    _ftp_port = int(os.environ['BBP_FTP_PORT'])
+    _ftp_user = os.environ.get('BBP_FTP_USER', 'bbp')
+    _ftp_pass = os.environ.get('BBP_FTP_PASS', '')
+
+    if not _ftp_pass:
+        print("WARNING: BBP_FTP_PASS not set — FTP server will not start")
+    else:
+        def _on_ftp_frame(path):
+            """Called by burst_watcher for each incoming frame."""
+            import os as _os
+            fname = _os.path.basename(path)
+            ext = fname.rsplit('.', 1)[-1].lower() if '.' in fname else ''
+            if ext not in ingest_pipeline.ALLOWED_EXTENSIONS:
+                return
+            try:
+                with open(path, 'rb') as f:
+                    data = f.read()
+                ingest_pipeline.ingest_file(data, filename=fname, source='ftp')
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).error(f'FTP ingest error {fname}: {exc}')
+
+        start_ftp_thread(
+            root=_ftp_root,
+            port=_ftp_port,
+            user=_ftp_user,
+            password=_ftp_pass,
+        )
+        start_burst_watcher(
+            ingest_root=_ftp_root,
+            preview_dir=os.environ.get('BBP_PREVIEW_DIR')
+                or os.path.join(tempfile.gettempdir(), 'bbp_preview'),
+            ffmpeg_fps=int(os.environ.get('BBP_FFMPEG_FPS', '8')),
+            resize_px=int(os.environ.get('BBP_RESIZE_PX', '1920')),
+            window_ms=int(os.environ.get('BBP_BURST_WINDOW_MS', '2000')),
+            min_frames=int(os.environ.get('BBP_BURST_MIN_FRAMES', '3')),
+            max_age_seconds=int(os.environ.get('BBP_BURST_MAX_AGE_SECONDS', '3600')),
+            on_frame_arrived=_on_ftp_frame,
+            on_burst_ready=lambda bid, webm, frames: None,
+        )
+
+
 if __name__ == "__main__":
     cert = os.environ.get('BBP_CERT')
     key  = os.environ.get('BBP_KEY')
@@ -1578,3 +1707,4 @@ if __name__ == "__main__":
         port=port,
         ssl_context=ssl_context,
     )
+

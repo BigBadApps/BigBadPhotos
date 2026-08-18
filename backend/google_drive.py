@@ -378,6 +378,18 @@ def move_file(
     return resp.json()
 
 
+def trash_file(access_token: str, file_id: str) -> dict:
+    resp = requests.patch(
+        _files_url(file_id),
+        headers=_headers(access_token),
+        json={'trashed': True},
+        params={'supportsAllDrives': 'true'},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 def folder_meta(access_token: str, folder_id: str) -> dict[str, Any]:
     resp = requests.get(
         _files_url(folder_id),

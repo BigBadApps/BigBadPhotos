@@ -10,3 +10,5 @@ Pillow>=10.0.0
 Flask-WTF
 pyftpdlib
 PyOpenSSL
+watchdog
+piexif

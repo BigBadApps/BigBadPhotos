@@ -10,7 +10,7 @@ import os
 import sqlite3
 import threading
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 DEFAULT_PATH = os.path.join(os.path.expanduser('~'), '.bigbadphotos', 'bbp.db')
 
@@ -148,6 +148,28 @@ SCHEMA_V4 = """
 ALTER TABLE gallery_tokens ADD COLUMN photo_ids_json TEXT;
 """
 
+SCHEMA_V5 = """
+CREATE TABLE IF NOT EXISTS ingest_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id    TEXT    NOT NULL,
+    filename      TEXT    NOT NULL,
+    source        TEXT    NOT NULL,
+    file_size     INTEGER,
+    drive_file_id TEXT,
+    drive_status  TEXT    NOT NULL DEFAULT 'pending',
+    error_detail  TEXT,
+    created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(session_id, filename)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ingest_log_session ON ingest_log(session_id);
+
+ALTER TABLE sessions ADD COLUMN ingest_folder_id TEXT;
+ALTER TABLE sessions ADD COLUMN ingest_folder_name TEXT;
+ALTER TABLE sessions ADD COLUMN ingest_api_key TEXT;
+ALTER TABLE sessions ADD COLUMN ingest_active INTEGER NOT NULL DEFAULT 0;
+"""
+
 
 def connect(path: str | None = None) -> sqlite3.Connection:
     path = path or _configured_path or DEFAULT_PATH
@@ -182,6 +204,11 @@ def migrate(conn: sqlite3.Connection) -> int:
         conn.execute('PRAGMA user_version=4')
         conn.commit()
         current = 4
+    if current < 5:
+        conn.executescript(SCHEMA_V5)
+        conn.execute('PRAGMA user_version=5')
+        conn.commit()
+        current = 5
     return conn.execute('PRAGMA user_version').fetchone()[0]
 
 

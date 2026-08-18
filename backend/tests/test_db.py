@@ -4,6 +4,8 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
+import pytest
+
 from backend import db
 
 
@@ -12,7 +14,7 @@ def test_migrate_creates_tables_and_sets_version():
         conn = db.connect(os.path.join(tmp, 'x.db'))
         version = db.migrate(conn)
         assert version == db.SCHEMA_VERSION
-        assert version == 4
+        assert version == 5
         names = {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
         assert {
@@ -86,7 +88,7 @@ def test_migrate_from_v2_with_existing_data():
         # Now run migrate
         new_version = db.migrate(conn)
         assert new_version == db.SCHEMA_VERSION
-        assert new_version == 4
+        assert new_version == 5
 
         # Check existing session preserved and has default gallery_enabled=1
         session_row = conn.execute("SELECT name, gallery_enabled, favorites_folder_id FROM sessions WHERE id = 1").fetchone()
@@ -119,4 +121,33 @@ def test_migrate_from_v2_with_existing_data():
 
         fav_count = conn.execute("SELECT COUNT(*) FROM gallery_favorites WHERE token_id = ?", (token_id,)).fetchone()[0]
         assert fav_count == 1
+
+
+def test_schema_v5_ingest_log(tmp_path):
+    """ingest_log table and session ingest columns exist after migration."""
+    db.reset_for_tests(str(tmp_path / 'v5.db'))
+    conn = db.get()
+
+    conn.execute(
+        "INSERT INTO ingest_log (session_id, filename, source) VALUES ('s1', 'IMG_001.JPG', 'http')"
+    )
+    row = conn.execute("SELECT * FROM ingest_log WHERE session_id = 's1'").fetchone()
+    assert row['filename'] == 'IMG_001.JPG'
+    assert row['drive_status'] == 'pending'
+    assert row['drive_file_id'] is None
+
+    import sqlite3
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO ingest_log (session_id, filename, source) VALUES ('s1', 'IMG_001.JPG', 'http')"
+        )
+
+    conn.execute(
+        "INSERT INTO sessions (name, source_folder_id, export_folder_id, created_at, updated_at)"
+        " VALUES ('Test', 'src', 'exp', 't', 't')"
+    )
+    conn.execute(
+        "UPDATE sessions SET ingest_folder_id='fld1', ingest_folder_name='Test',"
+        " ingest_api_key='abc123', ingest_active=1 WHERE id=1"
+    )
 

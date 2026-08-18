@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import Icon from './Icon'
 
 export const PRESETS = { strict: 0.72, balanced: 0.60, loose: 0.45 }
@@ -70,6 +71,39 @@ export function PickerRow({ label, value, placeholder, onPick }) {
         </span>
         <Icon name="arrowR" size={14} style={{ opacity: 0.5, flexShrink: 0 }} />
       </button>
+    </div>
+  )
+}
+
+export function IngestKeyField({ apiKey }) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = () => {
+    if (!apiKey) return
+    navigator.clipboard.writeText(apiKey).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+
+  if (!apiKey) return null
+
+  return (
+    <div>
+      <FieldLabel>Ingest API Key</FieldLabel>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <code style={{
+          flex: 1, padding: '8px 12px', borderRadius: 8,
+          background: 'var(--bg-3)', fontSize: '0.8rem',
+          overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>
+          {apiKey}
+        </code>
+        <button type="button" className="btn" onClick={handleCopy}
+          style={{ minHeight: 36, padding: '0 12px' }}>
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
     </div>
   )
 }

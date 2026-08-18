@@ -14,6 +14,7 @@ sidecar move into a `_archive` child of the source folder.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -24,6 +25,9 @@ from typing import Any, Callable
 import requests
 
 from backend import auto_edit, db, google_drive, scoring, sessions, topaz
+from backend.orientation import normalize_orientation
+
+logger = logging.getLogger(__name__)
 
 STATES = (
     'claimed', 'downloaded', 'scored', 'awaiting_review', 'approved',
@@ -300,6 +304,12 @@ class Pipeline:
                 os.makedirs(self._raw_dir, exist_ok=True)
                 with open(self._raw_path(row), 'wb') as fh:
                     fh.write(data)
+                try:
+                    normalize_orientation(self._raw_path(row))
+                except Exception as orient_exc:
+                    logger.warning(
+                        'Orientation normalization failed for %s: %s',
+                        row['filename'], orient_exc)
                 self._set_photo_state(row['id'], state='downloaded')
             except Exception as exc:
                 self._handle_step_exception(row, exc, 'download_failed')
@@ -504,9 +514,17 @@ class Pipeline:
                 # move/upload). A retry only redoes what *this row* hasn't
                 # already recorded as done.
                 if not row['moved_to_archive']:
-                    self._drive.move_file(
-                        token, row['drive_file_id'], archive_id,
-                        self.session['sourceFolderId'])
+                    existing_archive = self._drive.find_by_app_property(
+                        token, archive_id, 'bbp_archive_photo_id', str(row['id']))
+                    if not existing_archive:
+                        raw_path = self._raw_path(row)
+                        with open(raw_path, 'rb') as fh:
+                            raw_data = fh.read()
+                        self._drive.upload_file(
+                            token, archive_id, row['filename'], raw_data,
+                            'image/jpeg',
+                            app_properties={'bbp_archive_photo_id': str(row['id'])})
+                    self._drive.trash_file(token, row['drive_file_id'])
                     self._set_photo_state(row['id'], moved_to_archive=1)
                 if not row['sidecar_uploaded']:
                     # Same Drive-side ground-truth check as _export, for the

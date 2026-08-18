@@ -115,3 +115,7 @@ export function regenerateGallery(sessionId) {
   return jsonFetch(`/sessions/${sessionId}/gallery/regenerate`, { method: 'POST' })
 }
 
+export function getIngestStatus(sessionId) {
+  return jsonFetch(`/ingest/status/${sessionId}`)
+}
+
