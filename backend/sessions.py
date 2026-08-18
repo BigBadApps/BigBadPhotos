@@ -105,6 +105,8 @@ def _validate(merged: dict) -> dict:
     if ingest_folder_name is not None:
         ingest_folder_name = str(ingest_folder_name).strip() or None
 
+    ingest_active = bool(merged.get('ingestActive', merged.get('ingest_active', False)))
+
     return {
         'name': name,
         'sourceFolderId': source_folder_id,
@@ -124,6 +126,7 @@ def _validate(merged: dict) -> dict:
         'favoritesFolderName': favorites_folder_name,
         'ingestFolderId': ingest_folder_id,
         'ingestFolderName': ingest_folder_name,
+        'ingestActive': ingest_active,
     }
 
 
@@ -132,6 +135,8 @@ def create(data: dict) -> dict:
     now = _now()
     conn = db.get()
     try:
+        if validated['ingestActive']:
+            conn.execute('UPDATE sessions SET ingest_active = 0')
         cur = conn.execute(
             "INSERT INTO sessions (name, source_folder_id, source_folder_name,"
             " export_folder_id, export_folder_name, archive_folder_id,"
@@ -160,7 +165,7 @@ def create(data: dict) -> dict:
                 validated['ingestFolderId'],
                 validated['ingestFolderName'],
                 secrets.token_hex(16),
-                0,
+                int(validated['ingestActive']),
                 now,
                 now,
             ),
@@ -217,13 +222,15 @@ def update(session_id: int, data: dict) -> dict:
     now = _now()
     conn = db.get()
     try:
+        if validated['ingestActive']:
+            conn.execute('UPDATE sessions SET ingest_active = 0 WHERE id != ?', (session_id,))
         conn.execute(
             "UPDATE sessions SET name=?, source_folder_id=?, source_folder_name=?,"
             " export_folder_id=?, export_folder_name=?, archive_folder_id=?,"
             " autonomous=?, preset=?, threshold=?, burst_best_only=?,"
             " edit_mode=?, edit_strength=?, poll_seconds=?, gallery_enabled=?,"
             " favorites_folder_id=?, favorites_folder_name=?,"
-            " ingest_folder_id=?, ingest_folder_name=?, updated_at=?"
+            " ingest_folder_id=?, ingest_folder_name=?, ingest_active=?, updated_at=?"
             " WHERE id=?",
             (
                 validated['name'],
@@ -244,6 +251,7 @@ def update(session_id: int, data: dict) -> dict:
                 validated['favoritesFolderName'],
                 validated['ingestFolderId'],
                 validated['ingestFolderName'],
+                int(validated['ingestActive']),
                 now,
                 session_id,
             ),

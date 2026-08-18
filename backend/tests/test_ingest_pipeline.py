@@ -129,3 +129,42 @@ def test_ingest_file_no_drive_folder_fails():
     result = ingest_file(b'data', filename='IMG_005.JPG', session_id=1, source='http')
     assert result['status'] == 'failed'
     assert 'folder' in result['error'].lower()
+
+
+@patch('backend.google_drive.upload_file')
+def test_ingest_file_retries_after_previous_failure(mock_upload):
+    from backend.ingest_pipeline import ingest_file
+
+    mock_upload.side_effect = RuntimeError('transient error')
+    _create_session_with_ingest()
+
+    result1 = ingest_file(b'data', filename='IMG_006.JPG', session_id=1, source='http')
+    assert result1['status'] == 'failed'
+
+    mock_upload.side_effect = None
+    mock_upload.return_value = {'id': 'gdrive_retry'}
+    result2 = ingest_file(b'data', filename='IMG_006.JPG', session_id=1, source='http')
+    assert result2['status'] == 'uploaded'
+    assert result2['drive_file_id'] == 'gdrive_retry'
+    assert mock_upload.call_count == 2
+
+
+@patch('backend.google_drive.upload_file')
+def test_ingest_file_pending_conflict_does_not_reupload(mock_upload):
+    """A row still 'pending' from another in-flight request must not be raced to Drive."""
+    from backend.ingest_pipeline import ingest_file
+
+    mock_upload.return_value = {'id': 'gdrive_abc'}
+    _create_session_with_ingest()
+
+    conn = db.get()
+    conn.execute(
+        "INSERT INTO ingest_log (session_id, filename, source) VALUES (?, ?, 'http')",
+        ('1', 'IMG_007.JPG'),
+    )
+    conn.commit()
+
+    result = ingest_file(b'data', filename='IMG_007.JPG', session_id=1, source='http')
+    assert result['status'] == 'failed'
+    assert 'progress' in result['error'].lower()
+    mock_upload.assert_not_called()

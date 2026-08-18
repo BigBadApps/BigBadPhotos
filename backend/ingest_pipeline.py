@@ -85,14 +85,33 @@ def ingest_file(
         )
         conn.commit()
     except sqlite3.IntegrityError:
-        existing = _check_existing(sid, filename)
-        if existing and existing['drive_status'] == 'uploaded':
+        # A row for this (session, filename) already exists. Only a 'failed'
+        # row is safe to retry — claim it atomically so two concurrent
+        # requests can't both proceed to upload_file for the same filename.
+        cur = conn.execute(
+            "UPDATE ingest_log SET drive_status = 'pending', error_detail = NULL"
+            " WHERE session_id = ? AND filename = ? AND drive_status = 'failed'",
+            (str(sid), filename),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            existing = _check_existing(sid, filename)
+            if existing and existing['drive_status'] == 'uploaded':
+                return {
+                    'status': 'exists',
+                    'filename': filename,
+                    'drive_file_id': existing['drive_file_id'],
+                    'session_id': sid,
+                    'error': None,
+                }
+            # Still 'pending' under another in-flight request — don't race
+            # it to Drive; that request owns this filename's upload.
             return {
-                'status': 'exists',
+                'status': 'failed',
                 'filename': filename,
-                'drive_file_id': existing['drive_file_id'],
+                'drive_file_id': None,
                 'session_id': sid,
-                'error': None,
+                'error': 'Ingest already in progress for this filename',
             }
 
     if not access_token:

@@ -89,6 +89,30 @@ def test_update_and_list_and_delete():
     assert sessions.get(s['id']) is None
 
 
+def test_create_with_ingest_active_persists_and_is_exclusive():
+    s1 = sessions.create(_valid(name='S1', ingestActive=True))
+    assert s1['ingestActive'] is True
+
+    s2 = sessions.create(_valid(name='S2', ingestActive=True))
+    assert s2['ingestActive'] is True
+    assert sessions.get(s1['id'])['ingestActive'] is False
+
+
+def test_update_ingest_active_persists_and_is_exclusive():
+    s1 = sessions.create(_valid(name='S1'))
+    s2 = sessions.create(_valid(name='S2'))
+
+    sessions.update(s1['id'], {'ingestActive': True})
+    assert sessions.get(s1['id'])['ingestActive'] is True
+
+    sessions.update(s2['id'], {'ingestActive': True})
+    assert sessions.get(s2['id'])['ingestActive'] is True
+    assert sessions.get(s1['id'])['ingestActive'] is False
+
+    sessions.update(s2['id'], {'ingestActive': False})
+    assert sessions.get(s2['id'])['ingestActive'] is False
+
+
 def test_settings_roundtrip():
     assert sessions.get_setting('inbox_folder_id') is None
     sessions.set_setting('inbox_folder_id', 'folder-123')
