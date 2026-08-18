@@ -143,6 +143,49 @@ def test_failed_update_with_duplicate_name_does_not_silently_clear_active_sessio
     assert sessions.get(active['id'])['ingestActive'] is True
 
 
+def test_set_ingest_active_rolls_back_on_any_exception(monkeypatch):
+    """The clear-then-set pair must not leak a partial write into a later,
+    unrelated commit on the same thread-local connection if the second
+    UPDATE (or anything else mid-transaction) throws — not just on
+    sqlite3.IntegrityError specifically."""
+    s1 = sessions.create(_valid(name='S1', ingestActive=True))
+    s2 = sessions.create(_valid(name='S2'))
+
+    real_conn = db.get()
+    calls = []
+
+    class _FlakyConn:
+        """Proxies the real thread-local connection, failing the 2nd execute()."""
+
+        def execute(self, sql, *args, **kwargs):
+            calls.append(sql)
+            if len(calls) == 2:
+                raise RuntimeError('simulated mid-transaction failure')
+            return real_conn.execute(sql, *args, **kwargs)
+
+        def __enter__(self):
+            return real_conn.__enter__()
+
+        def __exit__(self, *exc_info):
+            return real_conn.__exit__(*exc_info)
+
+        def __getattr__(self, name):
+            return getattr(real_conn, name)
+
+    monkeypatch.setattr(sessions.db, 'get', lambda: _FlakyConn())
+    with pytest.raises(RuntimeError):
+        sessions.set_ingest_active(s2['id'])
+    monkeypatch.undo()
+
+    # The first UPDATE (clearing s1's active flag) must not have leaked.
+    assert sessions.get(s1['id'])['ingestActive'] is True
+
+    # An unrelated write on the same thread-local connection must not
+    # resurrect and commit the aborted transaction.
+    sessions.create(_valid(name='Unrelated3'))
+    assert sessions.get(s1['id'])['ingestActive'] is True
+
+
 def test_settings_roundtrip():
     assert sessions.get_setting('inbox_folder_id') is None
     sessions.set_setting('inbox_folder_id', 'folder-123')
