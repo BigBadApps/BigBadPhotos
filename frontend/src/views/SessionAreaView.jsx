@@ -7,6 +7,7 @@ import { OblToggle, Chip, FieldLabel, PickerRow, PRESETS } from '../components/S
 import * as sessionsClient from '../api/sessionsClient'
 import { useSessionRun } from '../hooks/useSessionRun'
 import { formatRunDateRange, formatStatus } from '../utils/formatters'
+import { copyText } from '../utils/clipboard'
 
 export default function SessionAreaView() {
   const { sessionId } = useParams()
@@ -158,7 +159,7 @@ export default function SessionAreaView() {
 
   const handleCopyLink = useCallback((url) => {
     if (!url) return
-    navigator.clipboard.writeText(url).then(() => {
+    copyText(url).then(() => {
       setCopiedLink(true)
       setTimeout(() => setCopiedLink(false), 2000)
     }).catch(() => {})

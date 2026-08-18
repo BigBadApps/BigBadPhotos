@@ -5,6 +5,7 @@ import GoogleDriveFolderPicker from '../components/GoogleDriveFolderPicker'
 import { OblToggle, Chip, FieldLabel, PickerRow, PRESETS } from '../components/SessionFormParts'
 import * as sessionsClient from '../api/sessionsClient'
 import { useStore } from '../store'
+import { copyText } from '../utils/clipboard'
 
 export default function SessionHubView() {
   const navigate = useNavigate()
@@ -31,7 +32,7 @@ export default function SessionHubView() {
 
   const handleCopyLink = useCallback((url) => {
     if (!url) return
-    navigator.clipboard.writeText(url).then(() => {
+    copyText(url).then(() => {
       setCopiedLink(true)
       setTimeout(() => setCopiedLink(false), 2000)
     }).catch(() => {})

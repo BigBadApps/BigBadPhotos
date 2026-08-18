@@ -721,6 +721,7 @@ def start_run(session_id: int, token_provider: Callable[[], str]) -> dict:
             (session_id, _now_iso(), 'running', 'starting'))
         conn.commit()
     except sqlite3.IntegrityError as exc:
+        conn.rollback()
         raise RunConflict(
             'a run is already active; stop it before starting another') from exc
     run_id = cur.lastrowid
