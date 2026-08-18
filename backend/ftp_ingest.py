@@ -16,8 +16,21 @@ import os, threading, logging
 logger = logging.getLogger(__name__)
 
 
+def _safe_makedirs(path: str, mode: int = 0o700) -> None:
+    """Create path owner-only, refusing to follow a pre-planted symlink.
+
+    root/preview dirs default under the shared, world-writable /tmp — an
+    attacker able to write there could pre-create a symlink pointing
+    elsewhere and have our writes follow it (CWE-377 / SonarQube S5443).
+    """
+    if os.path.islink(path):
+        raise RuntimeError(f'refusing to use symlink as ingest directory: {path}')
+    os.makedirs(path, mode=mode, exist_ok=True)
+    os.chmod(path, mode)
+
+
 def start_ftp_thread(root: str, port: int, user: str, password: str):
-    os.makedirs(root, exist_ok=True)
+    _safe_makedirs(root)
 
     authorizer = DummyAuthorizer()
     authorizer.add_user(user, password, root, perm='elradfmwMT')

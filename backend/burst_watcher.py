@@ -20,6 +20,19 @@ logger = logging.getLogger(__name__)
 SUPPORTED_EXTS = {'.jpg', '.jpeg'}
 
 
+def _safe_makedirs(path: str, mode: int = 0o700) -> None:
+    """Create path owner-only, refusing to follow a pre-planted symlink.
+
+    preview_dir defaults under the shared, world-writable /tmp — an
+    attacker able to write there could pre-create a symlink pointing
+    elsewhere and have our writes follow it (CWE-377 / SonarQube S5443).
+    """
+    if os.path.islink(path):
+        raise RuntimeError(f'refusing to use symlink as ingest directory: {path}')
+    os.makedirs(path, mode=mode, exist_ok=True)
+    os.chmod(path, mode)
+
+
 def _resize(src: str, dest: str, max_px: int):
     with Image.open(src) as img:
         img.thumbnail((max_px, max_px), Image.LANCZOS)
@@ -91,7 +104,7 @@ class BurstEventHandler(FileSystemEventHandler):
 
     def _process_burst(self, burst_id: str, src_paths: list[str]):
         burst_dir = os.path.join(self.preview_dir, burst_id)
-        os.makedirs(burst_dir, exist_ok=True)
+        _safe_makedirs(burst_dir)
 
         # Resize all frames
         resized = []
@@ -165,7 +178,7 @@ def _sweep(preview_dir: str, max_age_s: int):
 def start_burst_watcher(ingest_root, preview_dir, ffmpeg_fps, resize_px,
                         window_ms, min_frames, max_age_seconds,
                         on_frame_arrived, on_burst_ready):
-    os.makedirs(preview_dir, exist_ok=True)
+    _safe_makedirs(preview_dir)
 
     handler = BurstEventHandler(
         ingest_root, preview_dir, ffmpeg_fps, resize_px,

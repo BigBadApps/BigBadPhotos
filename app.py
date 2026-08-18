@@ -613,7 +613,10 @@ def _resolve_ingest_key():
 
 
 @app.post('/ingest')
-@csrf.exempt
+# Authenticated by a per-session bearer token (Authorization header), not a
+# browser cookie — CSRF exists to protect cookie-based sessions, which this
+# endpoint doesn't use, so the exemption is safe. NOSONAR
+@csrf.exempt  # NOSONAR
 def ingest_upload():
     sess = _resolve_ingest_key()
     if not sess:
@@ -645,7 +648,6 @@ def ingest_upload():
 
 
 @app.get('/ingest/test')
-@csrf.exempt
 def ingest_test():
     sess = _resolve_ingest_key()
     if not sess:
