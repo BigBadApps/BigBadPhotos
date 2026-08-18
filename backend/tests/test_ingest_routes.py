@@ -125,3 +125,58 @@ def test_ingest_status_requires_cookie_auth():
     # enforce_auth will reject without user session in non-debug...
     # but BBP_DEBUG=1 auto-creates dev session, so this should work
     assert resp.status_code == 200
+
+
+@patch('backend.google_drive.upload_file')
+def test_ingest_end_to_end_flow(mock_upload):
+    """Full flow: create session with ingest folder -> upload -> check status."""
+    mock_upload.return_value = {'id': 'gdrive_e2e'}
+    c = _client()
+
+    # Create session via API
+    r = c.post('/sessions', json={
+        'name': 'E2E Test',
+        'sourceFolderId': 'src',
+        'exportFolderId': 'exp',
+        'ingestFolderId': 'ingest_fld',
+        'ingestFolderName': 'E2E Ingest',
+    })
+    assert r.status_code == 200
+    sess = r.get_json()['session']
+    api_key = sess['ingestApiKey']
+    session_id = sess['id']
+    assert api_key is not None
+
+    # Verify key via /ingest/test
+    r = c.get('/ingest/test', headers={'Authorization': f'Bearer {api_key}'})
+    assert r.status_code == 200
+    assert r.get_json()['session_name'] == 'E2E Test'
+
+    # Upload a file
+    r = c.post(
+        '/ingest',
+        data={'file': (io.BytesIO(b'\xff\xd8\xff\xe0jpeg'), 'photo.jpg')},
+        headers={'Authorization': f'Bearer {api_key}'},
+        content_type='multipart/form-data',
+    )
+    assert r.status_code == 201
+    assert r.get_json()['drive_file_id'] == 'gdrive_e2e'
+
+    # Upload same file again — should dedup
+    r = c.post(
+        '/ingest',
+        data={'file': (io.BytesIO(b'\xff\xd8\xff\xe0jpeg'), 'photo.jpg')},
+        headers={'Authorization': f'Bearer {api_key}'},
+        content_type='multipart/form-data',
+    )
+    assert r.status_code == 200
+    assert r.get_json()['status'] == 'exists'
+
+    # Check status
+    with c.session_transaction() as s:
+        s['user'] = {'email': 'dev@local'}
+    r = c.get(f'/ingest/status/{session_id}')
+    assert r.status_code == 200
+    stats = r.get_json()['stats']
+    assert stats['uploaded'] == 1
+    assert stats['total'] == 1
