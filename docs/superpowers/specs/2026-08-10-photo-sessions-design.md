@@ -215,11 +215,11 @@ a dedupe ledger.
 Modest, bounded adjustments — the point is "better than untouched", not a look:
 
 - **Exposure** — gain toward a target mean luminance, clamped so highlights cannot clip
-- **Contrast** — CLAHE in LAB space with a conservative clip limit
+- **Contrast** — global gamma correction on L channel in LAB space
 - **Saturation** — bounded scale in HSV
 - **White balance** — gray-world nudge, clamped
 
-`strength='light'` applies half the computed deltas; `medium` applies them in full.
+`strength='light'` applies 35% of the computed deltas; `medium` applies 70%.
 Output is a new JPEG at quality 92 with EXIF carried over. The original is never
 modified. Returns the applied deltas for `edit_json`.
 
