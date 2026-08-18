@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify, send_from_directory, session, Response, g
 from flask_wtf.csrf import CSRFProtect, generate_csrf
+from werkzeug.utils import secure_filename
 import cv2
 import numpy as np
 import json
@@ -19,6 +20,7 @@ from backend import pipeline
 from backend import preflight
 from backend import sessions
 from backend import gallery
+from backend import ingest_pipeline
 from backend.scoring import (
     decode_image, score_sharpness, score_exposure, score_noise,
     score_contrast, score_artifacts, score_faces, compute_phash, hamming_distance,
@@ -53,6 +55,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
     PERMANENT_SESSION_LIFETIME=timedelta(days=7),
+    MAX_CONTENT_LENGTH=50 * 1024 * 1024,  # 50MB
 )
 
 if not IS_DEBUG:
@@ -130,6 +133,8 @@ def set_response_cookies(response):
 
 @app.before_request
 def enforce_auth():
+    if request.path.startswith('/ingest') and not request.path.startswith('/ingest/status'):
+        return  # /ingest uses its own bearer token auth
     if request.path == '/drive/status':
         return
     if (request.path not in API_ROUTES
@@ -137,7 +142,8 @@ def enforce_auth():
             and not request.path.startswith('/photos')
             and not request.path.startswith('/sessions')
             and not request.path.startswith('/runs')
-            and not request.path.startswith('/settings')):
+            and not request.path.startswith('/settings')
+            and not request.path.startswith('/ingest/status')):
         return  # static files, /health, /auth/* all pass through
     if not HAS_AUTH:
         return  # No auth configured = open access
@@ -589,6 +595,74 @@ def sessions_delete(session_id):
                         'detail': 'stop the active run before deleting this session'}), 409
     sessions.delete(session_id)
     return jsonify({'ok': True})
+
+
+def _resolve_ingest_key():
+    """Extract bearer token from Authorization header, resolve to session."""
+    auth = request.headers.get('Authorization', '')
+    if not auth.startswith('Bearer '):
+        return None
+    key = auth[7:].strip()
+    if not key:
+        return None
+    conn = db.get()
+    row = conn.execute(
+        'SELECT * FROM sessions WHERE ingest_api_key = ?', (key,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+@app.post('/ingest')
+@csrf.exempt
+def ingest_upload():
+    sess = _resolve_ingest_key()
+    if not sess:
+        return jsonify({'error': 'invalid_api_key'}), 401
+
+    if 'file' not in request.files:
+        return jsonify({'error': 'no_file'}), 422
+
+    f = request.files['file']
+    filename = secure_filename(f.filename or 'unknown')
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+    if ext not in ingest_pipeline.ALLOWED_EXTENSIONS:
+        return jsonify({'error': 'unsupported_file_type', 'detail': f'.{ext}'}), 422
+
+    data = f.read()
+    result = ingest_pipeline.ingest_file(
+        data,
+        filename=filename,
+        session_id=sess['id'],
+        source='http',
+    )
+
+    if result['status'] == 'uploaded':
+        return jsonify(result), 201
+    elif result['status'] == 'exists':
+        return jsonify(result), 200
+    else:
+        return jsonify(result), 500
+
+
+@app.get('/ingest/test')
+@csrf.exempt
+def ingest_test():
+    sess = _resolve_ingest_key()
+    if not sess:
+        return jsonify({'error': 'invalid_api_key'}), 401
+    return jsonify({
+        'ok': True,
+        'session_id': sess['id'],
+        'session_name': sess['name'],
+        'ingest_folder_id': sess.get('ingest_folder_id'),
+    })
+
+
+@app.get('/ingest/status/<int:session_id>')
+def ingest_status(session_id):
+    stats = ingest_pipeline.get_ingest_stats(session_id)
+    recent = ingest_pipeline.get_recent_ingests(session_id)
+    return jsonify({'stats': stats, 'recent': recent})
 
 
 def _format_run_row(conn, r):
