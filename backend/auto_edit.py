@@ -2,7 +2,7 @@
 Bounded "Auto" filter for the BigBadPhotos edit step.
 
 Pure function over file paths: reads a source image, computes a small set of
-bounded adjustments (white balance, exposure, contrast, saturation), applies
+bounded adjustments (white balance, exposure, gamma, saturation), applies
 them in a fixed order, and writes a JPEG output. No dependency on any other
 phase of the photo-sessions work — callers just pass paths in and get a dict
 of what was applied back out.
@@ -12,14 +12,14 @@ Design notes
 - Every adjustment is clamped to a safe range so the filter can never blow out
   highlights or crush an image; see STRENGTHS/SCALE and the per-adjustment
   bounds in `compute_adjustments`.
-- Order of operations is fixed: white balance -> exposure -> CLAHE contrast ->
-  saturation. Working buffer stays float32 throughout; a single clip to
-  [0, 255] happens right before the final uint8 cast.
+- Order of operations is fixed: white balance -> exposure -> gamma ->
+  saturation.
 - The source file is opened read-only and never written to.
 - EXIF from the source (if any) is carried over to the output via Pillow.
 """
 from __future__ import annotations
 
+import math
 import os
 from typing import Any
 
@@ -30,14 +30,13 @@ from PIL import Image
 # --- Constants ---------------------------------------------------------------
 
 STRENGTHS = ('light', 'medium')
-SCALE = {'light': 0.5, 'medium': 1.0}
+SCALE = {'light': 0.35, 'medium': 0.70}
 
 _TARGET_MEAN = 0.50  # target mean luminance, 0-1 range
-_EXPOSURE_GAIN_BOUNDS = (0.75, 1.35)
-_CLAHE_CLIP_BOUNDS = (1.0, 2.5)
-_CLAHE_TILE_GRID = (8, 8)
-_SATURATION_BOUNDS = (0.95, 1.20)
-_WB_GAIN_BOUNDS = (0.90, 1.10)
+_EXPOSURE_GAIN_BOUNDS = (0.85, 1.20)
+_GAMMA_BOUNDS = (0.85, 1.25)
+_SATURATION_BOUNDS = (0.97, 1.10)
+_WB_GAIN_BOUNDS = (0.95, 1.05)
 
 _JPEG_QUALITY = 92
 
@@ -59,7 +58,7 @@ def _interp(identity: float, value: float, scale: float) -> float:
 def compute_adjustments(bgr: np.ndarray) -> dict:
     """Compute bounded adjustments for a BGR uint8/float image at strength=medium.
 
-    Returns a dict with keys: exposureGain, claheClip, saturationScale, wbGains.
+    Returns a dict with keys: exposureGain, gamma, saturationScale, wbGains.
     All values are the "full strength" (medium) adjustments; callers scale them
     toward identity for other strengths.
     """
@@ -93,15 +92,16 @@ def compute_adjustments(bgr: np.ndarray) -> dict:
     else:
         exposure_gain = _clamp(_TARGET_MEAN / mean_luma, _EXPOSURE_GAIN_BOUNDS)
 
-    # --- Contrast: CLAHE clip limit, derived from the L-channel std dev ------
+    # --- Contrast: gamma correction, derived from L-channel mean in LAB space --
     exposed = np.clip(wb_img * exposure_gain, 0, 255).astype(np.uint8)
     lab = cv2.cvtColor(exposed, cv2.COLOR_BGR2LAB)
-    l_std = float(lab[:, :, 0].std())
-    # Low-contrast (low std) frames get a stronger clip limit; already-punchy
-    # frames get a gentler one. Map std (roughly 0-80) onto the clip bounds.
-    norm_std = _clamp(l_std / 80.0, (0.0, 1.0))
-    clahe_clip = _CLAHE_CLIP_BOUNDS[1] - norm_std * (_CLAHE_CLIP_BOUNDS[1] - _CLAHE_CLIP_BOUNDS[0])
-    clahe_clip = _clamp(clahe_clip, _CLAHE_CLIP_BOUNDS)
+    mean_l = float(lab[:, :, 0].mean())
+    ratio = mean_l / 255.0
+    if ratio <= 1e-6 or ratio >= 1.0 - 1e-6:
+        gamma = 1.0
+    else:
+        gamma = math.log(ratio) / math.log(_TARGET_MEAN)
+    gamma = _clamp(gamma, _GAMMA_BOUNDS)
 
     # --- Saturation: HSV S-channel scale, derived from current saturation ----
     hsv = cv2.cvtColor(exposed, cv2.COLOR_BGR2HSV)
@@ -113,7 +113,7 @@ def compute_adjustments(bgr: np.ndarray) -> dict:
 
     return {
         'exposureGain': exposure_gain,
-        'claheClip': clahe_clip,
+        'gamma': gamma,
         'saturationScale': saturation_scale,
         'wbGains': wb_gains,
     }
@@ -123,15 +123,14 @@ def _scale_adjustments(adjustments: dict, scale: float) -> dict:
     """Interpolate every adjustment from identity toward `adjustments` by `scale`."""
     return {
         'exposureGain': _interp(1.0, adjustments['exposureGain'], scale),
-        'claheClip': _interp(1.0, adjustments['claheClip'], scale),
+        'gamma': _interp(1.0, adjustments['gamma'], scale),
         'saturationScale': _interp(1.0, adjustments['saturationScale'], scale),
         'wbGains': [_interp(1.0, g, scale) for g in adjustments['wbGains']],
     }
 
 
 def _apply_pipeline(bgr: np.ndarray, adjustments: dict) -> np.ndarray:
-    """Apply white balance -> exposure -> CLAHE contrast -> saturation, float32
-    throughout, single clip to [0, 255] at the end, cast to uint8."""
+    """Apply white balance -> exposure -> gamma -> saturation."""
     img = bgr.astype(np.float32)
 
     # 1. White balance
@@ -141,25 +140,23 @@ def _apply_pipeline(bgr: np.ndarray, adjustments: dict) -> np.ndarray:
     # 2. Exposure
     img *= adjustments['exposureGain']
 
-    # 3. CLAHE contrast on the L channel in LAB space
-    img_u8_for_lab = np.clip(img, 0, 255).astype(np.uint8)
-    lab = cv2.cvtColor(img_u8_for_lab, cv2.COLOR_BGR2LAB)
-    l_channel, a_channel, b_channel = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=adjustments['claheClip'], tileGridSize=_CLAHE_TILE_GRID)
-    l_channel = clahe.apply(l_channel)
-    lab = cv2.merge((l_channel, a_channel, b_channel))
-    img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR).astype(np.float32)
+    # 3. Gamma on the L channel in LAB space via 256-entry LUT
+    gamma = adjustments['gamma']
+    lut = np.array(
+        [round(255.0 * ((i / 255.0) ** (1.0 / gamma))) for i in range(256)],
+        dtype=np.uint8,
+    )
+    img_u8 = np.clip(img, 0, 255).astype(np.uint8)
+    lab = cv2.cvtColor(img_u8, cv2.COLOR_BGR2LAB)
+    lab[:, :, 0] = cv2.LUT(lab[:, :, 0], lut)
+    img_u8 = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
     # 4. Saturation (HSV S channel scale)
-    img_u8_for_hsv = np.clip(img, 0, 255).astype(np.uint8)
-    hsv = cv2.cvtColor(img_u8_for_hsv, cv2.COLOR_BGR2HSV).astype(np.float32)
-    hsv[:, :, 1] *= adjustments['saturationScale']
-    hsv = np.clip(hsv, 0, 255).astype(np.uint8)
-    img = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR).astype(np.float32)
+    hsv = cv2.cvtColor(img_u8, cv2.COLOR_BGR2HSV).astype(np.float32)
+    hsv[:, :, 1] = np.clip(hsv[:, :, 1] * adjustments['saturationScale'], 0, 255)
+    img_u8 = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
-    # Single final clip + cast
-    img = np.clip(img, 0, 255).astype(np.uint8)
-    return img
+    return img_u8
 
 
 def apply(src_path: str, dst_path: str, strength: str = 'medium') -> dict:

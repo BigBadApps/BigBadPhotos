@@ -564,17 +564,17 @@ git commit -m "feat(drive): folder create, lookup, move, and capability helpers"
 - Consumes: nothing from other tasks (pure function over file paths)
 - Produces:
   - `STRENGTHS = ('light', 'medium')`
-  - `SCALE = {'light': 0.5, 'medium': 1.0}`
-  - `compute_adjustments(bgr: np.ndarray) -> dict` → `{'exposureGain': float, 'claheClip': float, 'saturationScale': float, 'wbGains': [float, float, float]}`
+  - `SCALE = {'light': 0.35, 'medium': 0.70}`
+  - `compute_adjustments(bgr: np.ndarray) -> dict` → `{'exposureGain': float, 'gamma': float, 'saturationScale': float, 'wbGains': [float, float, float]}`
   - `apply(src_path: str, dst_path: str, strength: str = 'medium') -> dict` → `{'status': 'ok', 'strength': str, 'applied': <adjustments>, 'outputPath': str}`
   - `AutoEditError(Exception)`
 
 Behaviour the tests pin down:
-- **Exposure** — gain toward a target mean luminance of `0.50` in the 0–1 range, clamped to `[0.75, 1.35]`. An already well-exposed frame gets a gain within `0.98–1.02`.
-- **Contrast** — CLAHE on the L channel in LAB, `clipLimit` in `[1.0, 2.5]`, `tileGridSize=(8, 8)`.
-- **Saturation** — HSV S multiplied by a scale clamped to `[0.95, 1.20]`; a frame that is already vivid gets a scale at or below `1.0`.
-- **White balance** — gray-world per-channel gains, each clamped to `[0.90, 1.10]`.
-- `strength='light'` moves every adjustment halfway from identity: `1 + (v - 1) * 0.5` for gains, `1 + (clip - 1) * 0.5` for the CLAHE clip.
+- **Exposure** — gain toward a target mean luminance of `0.50` in the 0–1 range, clamped to `[0.85, 1.20]`. An already well-exposed frame gets a gain within `0.98–1.02`.
+- **Contrast** — global gamma correction on the L channel in LAB, clamped to `[0.85, 1.25]`.
+- **Saturation** — HSV S multiplied by a scale clamped to `[0.97, 1.10]`; a frame that is already vivid gets a scale at or below `1.0`.
+- **White balance** — gray-world per-channel gains, each clamped to `[0.95, 1.05]`.
+- `strength='light'` uses scale `0.35`, `medium` uses `0.70` — both interpolate from identity toward the computed adjustment.
 - Output is JPEG quality 92. EXIF from the source is carried over using
   `PIL.Image.open(src).info.get('exif')` and passed to `save(..., exif=...)`.
 - The source file is never modified — assert its bytes are unchanged afterwards.
@@ -643,8 +643,8 @@ Expected: FAIL — `No module named 'backend.auto_edit'`
 
 - [ ] **Step 3: Implement `backend/auto_edit.py`**
 
-Order of operations matters and is fixed: white balance → exposure → CLAHE contrast →
-saturation. Work in float32, clip to `[0, 255]` once at the end, then cast to uint8.
+Order of operations matters and is fixed: white balance → exposure → gamma contrast →
+saturation.
 
 - [ ] **Step 4: Run the tests**
 
