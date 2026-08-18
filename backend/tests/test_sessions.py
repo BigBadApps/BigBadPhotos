@@ -113,6 +113,36 @@ def test_update_ingest_active_persists_and_is_exclusive():
     assert sessions.get(s2['id'])['ingestActive'] is False
 
 
+def test_failed_create_with_duplicate_name_does_not_silently_clear_active_session():
+    """A rejected duplicate-name create must not leave a pending, uncommitted
+    'ingest_active = 0' write sitting on the connection for a later
+    unrelated write to accidentally commit."""
+    active = sessions.create(_valid(name='Active', ingestActive=True))
+
+    with pytest.raises(sessions.SessionError):
+        sessions.create(_valid(name='Active', ingestActive=True))
+
+    assert sessions.get(active['id'])['ingestActive'] is True
+
+    # An unrelated write on the same (thread-local) connection must not
+    # resurrect and commit the rejected session's stale transaction.
+    sessions.create(_valid(name='Unrelated'))
+    assert sessions.get(active['id'])['ingestActive'] is True
+
+
+def test_failed_update_with_duplicate_name_does_not_silently_clear_active_session():
+    active = sessions.create(_valid(name='Active', ingestActive=True))
+    other = sessions.create(_valid(name='Other'))
+
+    with pytest.raises(sessions.SessionError):
+        sessions.update(other['id'], {'name': 'Active', 'ingestActive': True})
+
+    assert sessions.get(active['id'])['ingestActive'] is True
+
+    sessions.create(_valid(name='Unrelated2'))
+    assert sessions.get(active['id'])['ingestActive'] is True
+
+
 def test_settings_roundtrip():
     assert sessions.get_setting('inbox_folder_id') is None
     sessions.set_setting('inbox_folder_id', 'folder-123')

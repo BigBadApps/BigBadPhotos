@@ -114,23 +114,16 @@ def ingest_file(
                 'error': 'Ingest already in progress for this filename',
             }
 
-    if not access_token:
-        from backend import google_auth
-        mgr = google_auth._manager
-        if mgr and mgr.available():
-            access_token = mgr.get_access_token()
-
-    if not access_token:
-        _mark_failed(sid, filename, 'No Google OAuth token available')
-        return {
-            'status': 'failed',
-            'filename': filename,
-            'drive_file_id': None,
-            'session_id': sid,
-            'error': 'No Google OAuth token available',
-        }
-
     try:
+        if not access_token:
+            from backend import google_auth
+            mgr = google_auth._manager
+            if mgr and mgr.available():
+                access_token = mgr.get_access_token()
+
+        if not access_token:
+            raise RuntimeError('No Google OAuth token available')
+
         result = google_drive.upload_file(access_token, folder_id, filename, data)
         drive_file_id = result.get('id')
         conn.execute(

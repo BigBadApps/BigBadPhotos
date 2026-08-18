@@ -172,6 +172,7 @@ def create(data: dict) -> dict:
         )
         conn.commit()
     except sqlite3.IntegrityError as exc:
+        conn.rollback()
         raise SessionError(f'session name already exists: {validated["name"]}') from exc
 
     session_id = cur.lastrowid
@@ -258,6 +259,7 @@ def update(session_id: int, data: dict) -> dict:
         )
         conn.commit()
     except sqlite3.IntegrityError as exc:
+        conn.rollback()
         raise SessionError(f'session name already exists: {validated["name"]}') from exc
     return get(session_id)
 

@@ -168,3 +168,30 @@ def test_ingest_file_pending_conflict_does_not_reupload(mock_upload):
     assert result['status'] == 'failed'
     assert 'progress' in result['error'].lower()
     mock_upload.assert_not_called()
+
+
+def test_ingest_file_recovers_when_token_retrieval_raises():
+    """A pending claim must not be stuck forever if get_access_token() itself raises."""
+    from backend.ingest_pipeline import ingest_file
+
+    class RaisingMgr:
+        def available(self): return True
+        def get_access_token(self): raise RuntimeError('refresh token expired')
+
+    _create_session_with_ingest()
+
+    with patch('backend.google_auth._manager', RaisingMgr()):
+        result = ingest_file(b'data', filename='IMG_008.JPG', session_id=1, source='http')
+
+    assert result['status'] == 'failed'
+    assert 'refresh token expired' in result['error'].lower()
+
+    conn = db.get()
+    row = conn.execute("SELECT * FROM ingest_log WHERE filename = 'IMG_008.JPG'").fetchone()
+    assert row['drive_status'] == 'failed'
+
+    # And it must now be retryable — not stuck as an unreclaimable 'pending' row.
+    with patch('backend.google_auth._manager', RaisingMgr()):
+        result2 = ingest_file(b'data', filename='IMG_008.JPG', session_id=1, source='http')
+    assert result2['status'] == 'failed'
+    assert 'progress' not in result2['error'].lower()
