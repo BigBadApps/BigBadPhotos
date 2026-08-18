@@ -393,7 +393,18 @@ def score_faces(gray: np.ndarray,
             if not _mediapipe_fallback_warned:
                 _mediapipe_fallback_warned = True
                 logger.warning('MediaPipe face detection unavailable (%s); using Haar fallback', exc)
-    return _score_faces_haar(gray)
+    try:
+        return _score_faces_haar(gray)
+    except Exception as exc:  # noqa: BLE001 — a scored-without-faces photo
+        # beats losing the whole photo to an upstream OpenCV cascade bug
+        # (e.g. the known getScaleData assertion on certain image sizes).
+        logger.warning('Haar cascade face detection failed (%s); scoring without face data', exc)
+        return {
+            "face_count":       0,
+            "eyes_open":        None,
+            "subject_score":    None,
+            "primary_face_box": None,
+        }
 
 
 def compute_phash(gray: np.ndarray) -> int:
