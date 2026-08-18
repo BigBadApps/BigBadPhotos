@@ -64,7 +64,7 @@ def test_dark_frame_gets_positive_gain(tmp_path):
 def test_gain_is_clamped(tmp_path):
     src = _write_frame(tmp_path, mean=5)
     info = auto_edit.apply(str(src), str(tmp_path / 'o.jpg'), 'medium')
-    assert 0.75 <= info['applied']['exposureGain'] <= 1.35
+    assert 0.85 <= info['applied']['exposureGain'] <= 1.20
 
 
 def test_light_is_half_of_medium(tmp_path):
@@ -122,11 +122,11 @@ def test_adjustments_within_bounds_for_varied_frame(tmp_path):
     src = _write_frame(tmp_path, mean=90)
     info = auto_edit.apply(str(src), str(tmp_path / 'o.jpg'), 'medium')
     applied = info['applied']
-    assert 1.0 <= applied['claheClip'] <= 2.5
-    assert 0.95 <= applied['saturationScale'] <= 1.20
+    assert 0.85 <= applied['gamma'] <= 1.25
+    assert 0.97 <= applied['saturationScale'] <= 1.10
     assert len(applied['wbGains']) == 3
     for gain in applied['wbGains']:
-        assert 0.90 <= gain <= 1.10
+        assert 0.95 <= gain <= 1.05
 
 
 def test_compute_adjustments_returns_expected_keys(tmp_path):
@@ -134,7 +134,7 @@ def test_compute_adjustments_returns_expected_keys(tmp_path):
     bgr = cv2.imread(str(src))
     adjustments = auto_edit.compute_adjustments(bgr)
     assert set(adjustments.keys()) == {
-        'exposureGain', 'claheClip', 'saturationScale', 'wbGains',
+        'exposureGain', 'gamma', 'saturationScale', 'wbGains',
     }
     assert len(adjustments['wbGains']) == 3
 
