@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Icon from '../components/Icon'
 import GoogleDriveFolderPicker from '../components/GoogleDriveFolderPicker'
-import { OblToggle, Chip, FieldLabel, PickerRow, PRESETS } from '../components/SessionFormParts'
+import { OblToggle, Chip, FieldLabel, PickerRow, PRESETS, IngestKeyField } from '../components/SessionFormParts'
 import * as sessionsClient from '../api/sessionsClient'
 import { useStore } from '../store'
 
@@ -116,6 +116,9 @@ export default function SessionHubView() {
     } else if (pickerTarget === 'export') {
       setField('exportFolderId', id)
       setField('exportFolderName', name)
+    } else if (pickerTarget === 'ingest') {
+      setField('ingestFolderId', id)
+      setField('ingestFolderName', name)
     }
     setPickerTarget(null)
   }, [pickerTarget, setField])
@@ -145,6 +148,9 @@ export default function SessionHubView() {
       editMode: form.editMode,
       editStrength: form.editStrength,
       pollSeconds: Number(form.pollSeconds) || 30,
+      ingestFolderId: form.ingestFolderId || null,
+      ingestFolderName: form.ingestFolderName || null,
+      ingestActive: !!form.ingestActive,
     }
     try {
       const res = await sessionsClient.createSession(payload)
@@ -366,6 +372,23 @@ export default function SessionHubView() {
               onPick={() => setPickerTarget('export')}
             />
 
+            <PickerRow
+              label="Ingest Drive Folder"
+              value={form.ingestFolderName}
+              placeholder="Pick folder for live camera uploads..."
+              onPick={() => setPickerTarget('ingest')}
+            />
+
+            <IngestKeyField apiKey={form.ingestApiKey} />
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <FieldLabel>Ingest Active</FieldLabel>
+              <OblToggle
+                checked={!!form.ingestActive}
+                onChange={(v) => setField('ingestActive', v)}
+              />
+            </div>
+
             <div className="flex jcsb aic">
               <div>
                 <div className="fs-sm">Autonomous</div>
@@ -487,7 +510,7 @@ export default function SessionHubView() {
 
       <GoogleDriveFolderPicker
         open={pickerTarget != null}
-        title={pickerTarget === 'source' ? 'Choose source folder' : 'Choose export folder'}
+        title={pickerTarget === 'source' ? 'Choose source folder' : pickerTarget === 'ingest' ? 'Choose ingest folder' : 'Choose export folder'}
         allowCreate={pickerTarget === 'export'}
         onClose={() => setPickerTarget(null)}
         onSelect={handlePickFolder}

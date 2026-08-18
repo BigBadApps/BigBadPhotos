@@ -570,3 +570,41 @@ def test_settings_put_ignores_unknown_keys():
     assert r.get_json() == {'inboxFolderId': None, 'inboxFolderName': None,
                             'sessionsRoot': None}
 
+
+# -- ingest fields -------------------------------------------------------------
+
+def test_create_session_generates_ingest_key():
+    c = _client()
+    sid = _create_session(c)
+    r = c.get(f'/sessions/{sid}')
+    data = r.get_json()['session']
+    assert data['ingestApiKey'] is not None
+    assert len(data['ingestApiKey']) == 32
+
+
+def test_update_session_ingest_folder():
+    c = _client()
+    sid = _create_session(c)
+    r = c.put(f'/sessions/{sid}', json={
+        'ingestFolderId': 'folder_abc',
+        'ingestFolderName': 'Smith Senior 2026',
+    })
+    assert r.status_code == 200
+    data = r.get_json()['session']
+    assert data['ingestFolderId'] == 'folder_abc'
+    assert data['ingestFolderName'] == 'Smith Senior 2026'
+
+
+def test_set_ingest_active():
+    c = _client()
+    sid1 = _create_session(c, name='Session1')
+    sid2 = _create_session(c, name='Session2')
+
+    from backend import sessions
+    sessions.set_ingest_active(sid2)
+
+    s1 = sessions.get(sid1)
+    s2 = sessions.get(sid2)
+    assert s1['ingestActive'] is False
+    assert s2['ingestActive'] is True
+

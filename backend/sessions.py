@@ -1,6 +1,7 @@
 """Named session configs and app-wide settings, backed by backend.db."""
 from __future__ import annotations
 
+import secrets
 import sqlite3
 from datetime import datetime, timezone
 
@@ -38,6 +39,10 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         'galleryEnabled': bool(row['gallery_enabled']) if row['gallery_enabled'] is not None else True,
         'favoritesFolderId': row['favorites_folder_id'],
         'favoritesFolderName': row['favorites_folder_name'],
+        'ingestFolderId': row['ingest_folder_id'],
+        'ingestFolderName': row['ingest_folder_name'],
+        'ingestApiKey': row['ingest_api_key'],
+        'ingestActive': bool(row['ingest_active']),
         'createdAt': row['created_at'],
         'updatedAt': row['updated_at'],
     }
@@ -92,6 +97,14 @@ def _validate(merged: dict) -> dict:
     if favorites_folder_name is not None:
         favorites_folder_name = str(favorites_folder_name).strip() or None
 
+    ingest_folder_id = merged.get('ingestFolderId', merged.get('ingest_folder_id'))
+    if ingest_folder_id is not None:
+        ingest_folder_id = str(ingest_folder_id).strip() or None
+
+    ingest_folder_name = merged.get('ingestFolderName', merged.get('ingest_folder_name'))
+    if ingest_folder_name is not None:
+        ingest_folder_name = str(ingest_folder_name).strip() or None
+
     return {
         'name': name,
         'sourceFolderId': source_folder_id,
@@ -109,6 +122,8 @@ def _validate(merged: dict) -> dict:
         'galleryEnabled': gallery_enabled,
         'favoritesFolderId': favorites_folder_id,
         'favoritesFolderName': favorites_folder_name,
+        'ingestFolderId': ingest_folder_id,
+        'ingestFolderName': ingest_folder_name,
     }
 
 
@@ -122,8 +137,9 @@ def create(data: dict) -> dict:
             " export_folder_id, export_folder_name, archive_folder_id,"
             " autonomous, preset, threshold, burst_best_only, edit_mode,"
             " edit_strength, poll_seconds, gallery_enabled, favorites_folder_id,"
-            " favorites_folder_name, created_at, updated_at) VALUES"
-            " (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " favorites_folder_name, ingest_folder_id, ingest_folder_name,"
+            " ingest_api_key, ingest_active, created_at, updated_at) VALUES"
+            " (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 validated['name'],
                 validated['sourceFolderId'],
@@ -141,6 +157,10 @@ def create(data: dict) -> dict:
                 int(validated['galleryEnabled']),
                 validated['favoritesFolderId'],
                 validated['favoritesFolderName'],
+                validated['ingestFolderId'],
+                validated['ingestFolderName'],
+                secrets.token_hex(16),
+                0,
                 now,
                 now,
             ),
@@ -202,7 +222,8 @@ def update(session_id: int, data: dict) -> dict:
             " export_folder_id=?, export_folder_name=?, archive_folder_id=?,"
             " autonomous=?, preset=?, threshold=?, burst_best_only=?,"
             " edit_mode=?, edit_strength=?, poll_seconds=?, gallery_enabled=?,"
-            " favorites_folder_id=?, favorites_folder_name=?, updated_at=?"
+            " favorites_folder_id=?, favorites_folder_name=?,"
+            " ingest_folder_id=?, ingest_folder_name=?, updated_at=?"
             " WHERE id=?",
             (
                 validated['name'],
@@ -221,6 +242,8 @@ def update(session_id: int, data: dict) -> dict:
                 int(validated['galleryEnabled']),
                 validated['favoritesFolderId'],
                 validated['favoritesFolderName'],
+                validated['ingestFolderId'],
+                validated['ingestFolderName'],
                 now,
                 session_id,
             ),
@@ -251,3 +274,20 @@ def set_setting(key: str, value: str) -> None:
         (key, value),
     )
     conn.commit()
+
+
+def set_ingest_active(session_id: int) -> dict:
+    """Mark a session as the active ingest target. Clears all others."""
+    conn = db.get()
+    conn.execute('UPDATE sessions SET ingest_active = 0')
+    conn.execute('UPDATE sessions SET ingest_active = 1 WHERE id = ?', (session_id,))
+    conn.commit()
+    return get(session_id)
+
+
+def regenerate_api_key(session_id: int) -> str:
+    key = secrets.token_hex(16)
+    conn = db.get()
+    conn.execute('UPDATE sessions SET ingest_api_key = ? WHERE id = ?', (key, session_id))
+    conn.commit()
+    return key
