@@ -135,10 +135,11 @@ def create(data: dict) -> dict:
     now = _now()
     conn = db.get()
     try:
-        if validated['ingestActive']:
-            conn.execute('UPDATE sessions SET ingest_active = 0')
-        cur = conn.execute(
-            "INSERT INTO sessions (name, source_folder_id, source_folder_name,"
+        with conn:
+            if validated['ingestActive']:
+                conn.execute('UPDATE sessions SET ingest_active = 0')
+            cur = conn.execute(
+                "INSERT INTO sessions (name, source_folder_id, source_folder_name,"
             " export_folder_id, export_folder_name, archive_folder_id,"
             " autonomous, preset, threshold, burst_best_only, edit_mode,"
             " edit_strength, poll_seconds, gallery_enabled, favorites_folder_id,"
@@ -169,10 +170,11 @@ def create(data: dict) -> dict:
                 now,
                 now,
             ),
-        )
-        conn.commit()
+            )
     except sqlite3.IntegrityError as exc:
-        conn.rollback()
+        # with conn: already rolled back the pending ingest_active clear
+        # above — any exception here leaves nothing stale on the
+        # thread-local connection for a later, unrelated request to commit.
         raise SessionError(f'session name already exists: {validated["name"]}') from exc
 
     session_id = cur.lastrowid
@@ -223,43 +225,42 @@ def update(session_id: int, data: dict) -> dict:
     now = _now()
     conn = db.get()
     try:
-        if validated['ingestActive']:
-            conn.execute('UPDATE sessions SET ingest_active = 0 WHERE id != ?', (session_id,))
-        conn.execute(
-            "UPDATE sessions SET name=?, source_folder_id=?, source_folder_name=?,"
-            " export_folder_id=?, export_folder_name=?, archive_folder_id=?,"
-            " autonomous=?, preset=?, threshold=?, burst_best_only=?,"
-            " edit_mode=?, edit_strength=?, poll_seconds=?, gallery_enabled=?,"
-            " favorites_folder_id=?, favorites_folder_name=?,"
-            " ingest_folder_id=?, ingest_folder_name=?, ingest_active=?, updated_at=?"
-            " WHERE id=?",
-            (
-                validated['name'],
-                validated['sourceFolderId'],
-                validated['sourceFolderName'],
-                validated['exportFolderId'],
-                validated['exportFolderName'],
-                validated['archiveFolderId'],
-                int(validated['autonomous']),
-                validated['preset'],
-                validated['threshold'],
-                int(validated['burstBestOnly']),
-                validated['editMode'],
-                validated['editStrength'],
-                validated['pollSeconds'],
-                int(validated['galleryEnabled']),
-                validated['favoritesFolderId'],
-                validated['favoritesFolderName'],
-                validated['ingestFolderId'],
-                validated['ingestFolderName'],
-                int(validated['ingestActive']),
-                now,
-                session_id,
-            ),
-        )
-        conn.commit()
+        with conn:
+            if validated['ingestActive']:
+                conn.execute('UPDATE sessions SET ingest_active = 0 WHERE id != ?', (session_id,))
+            conn.execute(
+                "UPDATE sessions SET name=?, source_folder_id=?, source_folder_name=?,"
+                " export_folder_id=?, export_folder_name=?, archive_folder_id=?,"
+                " autonomous=?, preset=?, threshold=?, burst_best_only=?,"
+                " edit_mode=?, edit_strength=?, poll_seconds=?, gallery_enabled=?,"
+                " favorites_folder_id=?, favorites_folder_name=?,"
+                " ingest_folder_id=?, ingest_folder_name=?, ingest_active=?, updated_at=?"
+                " WHERE id=?",
+                (
+                    validated['name'],
+                    validated['sourceFolderId'],
+                    validated['sourceFolderName'],
+                    validated['exportFolderId'],
+                    validated['exportFolderName'],
+                    validated['archiveFolderId'],
+                    int(validated['autonomous']),
+                    validated['preset'],
+                    validated['threshold'],
+                    int(validated['burstBestOnly']),
+                    validated['editMode'],
+                    validated['editStrength'],
+                    validated['pollSeconds'],
+                    int(validated['galleryEnabled']),
+                    validated['favoritesFolderId'],
+                    validated['favoritesFolderName'],
+                    validated['ingestFolderId'],
+                    validated['ingestFolderName'],
+                    int(validated['ingestActive']),
+                    now,
+                    session_id,
+                ),
+            )
     except sqlite3.IntegrityError as exc:
-        conn.rollback()
         raise SessionError(f'session name already exists: {validated["name"]}') from exc
     return get(session_id)
 
@@ -289,9 +290,9 @@ def set_setting(key: str, value: str) -> None:
 def set_ingest_active(session_id: int) -> dict:
     """Mark a session as the active ingest target. Clears all others."""
     conn = db.get()
-    conn.execute('UPDATE sessions SET ingest_active = 0')
-    conn.execute('UPDATE sessions SET ingest_active = 1 WHERE id = ?', (session_id,))
-    conn.commit()
+    with conn:
+        conn.execute('UPDATE sessions SET ingest_active = 0')
+        conn.execute('UPDATE sessions SET ingest_active = 1 WHERE id = ?', (session_id,))
     return get(session_id)
 
 
