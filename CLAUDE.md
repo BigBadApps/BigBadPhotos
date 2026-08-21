@@ -57,6 +57,8 @@ This project is managed by BigBadAgentForce.
 - `POST /sessions/<id>/preflight`, `POST /sessions/<id>/start` — run pre-checks / start a run
 - `GET /runs/active`, `POST /runs/active/stop`, `GET /runs/<id>/photos`, `POST /runs/<id>/approve-all` — live run control + review
 - `POST /photos/<id>/decision`, `GET /photos/<id>/thumb` — per-photo review + thumbnail proxy
+- `POST /ingest` — Camera Bridge upload (bearer `ingest_api_key`); requires the session's `ingestActive` flag, not just a valid key
+- `POST /sessions/<id>/ingest/regenerate-key` — rotate a session's ingest API key, revoking the old one immediately
 - `GET/PUT /settings` — inbox / sessions-root wiring
 
 ## Environment Variables

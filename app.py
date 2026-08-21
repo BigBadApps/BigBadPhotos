@@ -585,6 +585,15 @@ def sessions_update(session_id):
     return jsonify(resp)
 
 
+@app.post('/sessions/<int:session_id>/ingest/regenerate-key')
+def sessions_regenerate_ingest_key(session_id):
+    if sessions.get(session_id) is None:
+        return jsonify({'error': 'not_found',
+                        'detail': f'session not found: {session_id}'}), 404
+    new_key = sessions.regenerate_api_key(session_id)
+    return jsonify({'ok': True, 'ingestApiKey': new_key})
+
+
 @app.delete('/sessions/<int:session_id>')
 def sessions_delete(session_id):
     if sessions.get(session_id) is None:
@@ -621,6 +630,8 @@ def ingest_upload():
     sess = _resolve_ingest_key()
     if not sess:
         return jsonify({'error': 'invalid_api_key'}), 401
+    if not sess.get('ingest_active'):
+        return jsonify({'error': 'ingest_inactive'}), 403
 
     if 'file' not in request.files:
         return jsonify({'error': 'no_file'}), 422

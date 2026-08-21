@@ -608,3 +608,28 @@ def test_set_ingest_active():
     assert s1['ingestActive'] is False
     assert s2['ingestActive'] is True
 
+
+def test_regenerate_ingest_key_route_rotates_key_and_revokes_old_one():
+    c = _client()
+    sid = _create_session(c, name='Session1', ingestFolderId='fld1')
+
+    from backend import sessions
+    old_key = sessions.get(sid)['ingestApiKey']
+
+    r = c.post(f'/sessions/{sid}/ingest/regenerate-key')
+    assert r.status_code == 200
+    new_key = r.get_json()['ingestApiKey']
+
+    assert new_key != old_key
+    assert sessions.get(sid)['ingestApiKey'] == new_key
+
+    # old key must be dead immediately
+    old_probe = c.get('/ingest/test', headers={'Authorization': f'Bearer {old_key}'})
+    assert old_probe.status_code == 401
+
+
+def test_regenerate_ingest_key_unknown_session_404():
+    c = _client()
+    r = c.post('/sessions/999/ingest/regenerate-key')
+    assert r.status_code == 404
+

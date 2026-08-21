@@ -87,6 +87,27 @@ def test_ingest_rejects_bad_key():
     assert resp.status_code == 401
 
 
+@patch('backend.google_drive.upload_file')
+def test_ingest_rejects_when_session_inactive(mock_upload):
+    """A valid key on a session with ingestActive=False must not reach Drive.
+
+    This is the kill switch: toggling ingest off in the Session UI must stop
+    the iOS Shortcut / USB-C HTTP path too, not just the FTP path.
+    """
+    _create_ingest_session(active=False)
+    c = _client()
+
+    resp = c.post(
+        '/ingest',
+        data={'file': (io.BytesIO(b'\xff\xd8\xff\xe0fake'), 'IMG_001.JPG')},
+        headers={'Authorization': 'Bearer testkey123'},
+        content_type='multipart/form-data',
+    )
+    assert resp.status_code == 403
+    assert resp.get_json()['error'] == 'ingest_inactive'
+    mock_upload.assert_not_called()
+
+
 def test_ingest_rejects_unsupported_extension():
     _create_ingest_session()
     c = _client()
@@ -140,6 +161,7 @@ def test_ingest_end_to_end_flow(mock_upload):
         'exportFolderId': 'exp',
         'ingestFolderId': 'ingest_fld',
         'ingestFolderName': 'E2E Ingest',
+        'ingestActive': True,
     })
     assert r.status_code == 200
     sess = r.get_json()['session']
